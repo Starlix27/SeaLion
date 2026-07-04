@@ -114,6 +114,7 @@ def print_help_text() -> None:
     print("  install [nome]     Installa il tool selezionato o specificato")
     print("  vuln <protocollo>  Mostra vulnerabilità e tool per un protocollo")
     print("  vuln list          Elenca i protocolli disponibili")
+    print("  vuln *             Elenca i protocolli disponibili") 
     print("  help               Mostra questo aiuto")
     print("  back               Torna alla console principale")
     print("  exit               Esci da " + APP_NAME)
@@ -388,151 +389,300 @@ def cmd_install(args: argparse.Namespace, state: ConsoleState | None = None) -> 
 # vuln command — vulnerability cheatsheets per protocollo
 # ---------------------------------------------------------------------------
 
+VULN_CATEGORIES: dict[str, list[str]] = {
+    "Trasferimento File": ["ftp", "smb", "nfs"],
+    "DNS & Ricognizione": ["dns"],
+    "Email": ["smtp", "imap-pop3"],
+    "Monitoraggio Rete": ["snmp"],
+    "Database": ["mysql", "mssql", "oracle-tns"],
+    "Accesso Remoto": ["ssh", "rdp", "winrm", "wmi"],
+    "Hardware & Management": ["ipmi"],
+}
+
 VULN_DB: dict[str, dict] = {
     "ftp": {
         "nome": "FTP — File Transfer Protocol",
         "porte": "21 (controllo), 20 (dati)",
+        "categoria": "Trasferimento File",
         "descrizione": (
-            "Protocollo per il trasferimento file. Usa due canali separati (controllo e dati).\n"
-            "Trasmette TUTTO in chiaro: credenziali e file possono essere intercettati."
+            "Protocollo per il trasferimento file che opera al livello Applicazione.\n"
+            "Usa due canali separati: controllo (porta 21) e dati (porta 20).\n"
+            "Trasmette TUTTO in chiaro: credenziali e file possono essere intercettati.\n"
+            "\n"
+            "Modalità Attiva: il server si connette al client per inviare dati (bloccata dai firewall).\n"
+            "Modalità Passiva: il client si connette al server (più compatibile, usata oggi).\n"
+            "\n"
+            "TFTP (Trivial FTP): variante su UDP, senza autenticazione, solo get/put.\n"
+            "Da non confondere con SFTP (SSH File Transfer) o FTPS (FTP over SSL)."
         ),
+        "configurazione": [
+            "Server principale Linux: vsFTPd (Very Secure FTP Daemon)",
+            "File config: /etc/vsftpd.conf",
+            "Utenti vietati: /etc/ftpusers (root, guest, ecc.)",
+            "Vedere config attiva: cat /etc/vsftpd.conf | grep -v '#'",
+        ],
         "vulnerabilità": [
-            "Login anonimo (anonymous:anonymous) — accesso senza credenziali",
-            "Credenziali in chiaro — sniffabili con Wireshark/tcpdump",
+            "Login anonimo (anonymous_enable=YES) — accesso senza credenziali",
             "Upload anonimo (anon_upload_enable=YES) — caricamento file malevoli",
-            "ls_recurse_enable=YES — mappa l'intero server in pochi secondi",
-            "Versioni obsolete di vsFTPd/ProFTPd con exploit noti",
+            "Credenziali in chiaro — sniffabili con Wireshark/tcpdump",
+            "hide_ids=NO — mostra i veri username dei file (utile per brute force SSH)",
+            "ls_recurse_enable=YES — mappa l'intero server con ls -R in pochi secondi",
+            "ssl_enable=NO — nessuna crittografia, tutto intercettabile",
+            "Versioni obsolete di vsFTPd/ProFTPd con exploit noti (es. vsFTPd 2.3.4 backdoor)",
         ],
         "enumerazione": [
+            "# === SCAN & RILEVAMENTO ===",
             "sudo nmap -sV -p21 -sC -A <IP>                     # Scan aggressivo porta 21",
             "sudo nmap --script ftp-anon -p21 <IP>               # Check accesso anonimo",
+            "",
+            "# === CONNESSIONE MANUALE ===",
             "ftp <IP> [porta]                                     # Connessione manuale",
             "  > anonymous / anonymous                            # Login anonimo",
             "  > status                                           # Info configurazione server",
-            "  > debug / trace                                    # Mostra pacchetti raw",
+            "  > debug                                            # Mostra pacchetti raw client→server",
+            "  > trace                                            # Mostra ogni pacchetto scambiato",
             "  > ls -R                                            # Lista ricorsiva (se abilitata)",
-            "wget -m --no-passive ftp://anonymous:anonymous@<IP>  # Scarica tutto il server",
-            "openssl s_client -connect <IP>:21 -starttls ftp      # Certificati SSL/TLS",
+            "  > get <file>                                       # Scarica un file",
+            "  > put <file>                                       # Carica un file (se permesso)",
+            "",
+            "# === DOWNLOAD DI MASSA ===",
+            "wget -m --no-passive ftp://anonymous:anonymous@<IP>  # Scarica tutto il server FTP",
+            "",
+            "# === CERTIFICATI & CRITTOGRAFIA ===",
+            "openssl s_client -connect <IP>:21 -starttls ftp      # Verifica certificati SSL/TLS",
         ],
         "tool_consigliati": ["nmap", "nikto", "impacket"],
     },
     "smb": {
         "nome": "SMB — Server Message Block",
         "porte": "445 (SMB/CIFS), 137-139 (NetBIOS legacy)",
+        "categoria": "Trasferimento File",
         "descrizione": (
             "Protocollo per la condivisione di file, stampanti e risorse in rete.\n"
-            "Pilastro delle reti Windows. Su Linux si usa Samba."
+            "Pilastro delle reti Windows. Su Linux si usa Samba (demoni: smbd + nmbd).\n"
+            "\n"
+            "Versioni: CIFS (NT4) → SMB 1.0 (2000) → SMB 2.0 (Vista) → SMB 3.1.1 (Win10+).\n"
+            "La porta 445 è lo standard moderno; le porte 137-139 sono legacy NetBIOS.\n"
+            "\n"
+            "ACL (Access Control Lists) regolano chi può leggere/scrivere/eseguire.\n"
+            "Le share possono mostrare una gerarchia diversa dal disco fisico del server."
         ),
+        "configurazione": [
+            "Config Samba (Linux): /etc/samba/smb.conf",
+            "Vedere config attiva: cat /etc/samba/smb.conf | grep -v '#\\|;'",
+            "Riavviare dopo modifiche: sudo systemctl restart smbd",
+            "Sezioni: [global] per regole generali, [nome_share] per ogni condivisione",
+        ],
         "vulnerabilità": [
             "Null Session — accesso anonimo senza credenziali (-N)",
-            "guest ok = yes — condivisioni aperte a tutti",
-            "browseable = yes — share visibili a chiunque",
-            "read only = no — scrittura permessa (upload web shell)",
-            "create mask = 0777 — permessi massimi su file creati",
-            "EternalBlue (MS17-010) — RCE su SMBv1 (WannaCry)",
-            "Enumerazione utenti via RPC (rpcclient, samrdump)",
+            "guest ok = yes — condivisioni aperte a tutti senza password",
+            "browseable = yes — share visibili a chiunque interroghi il server",
+            "read only = no / writable = yes — scrittura permessa (upload web shell)",
+            "create mask = 0777 — permessi massimi su file creati (RWX per tutti)",
+            "logon script / magic script — se sovrascrivibili → RCE (Remote Code Execution)",
+            "EternalBlue (MS17-010) — RCE su SMBv1 senza autenticazione (WannaCry/NotPetya)",
+            "Enumerazione utenti via RPC (rpcclient, samrdump) — mappa tutti gli utenti del dominio",
         ],
         "enumerazione": [
-            "smbclient -N -L //<IP>                               # Elenca share (null session)",
-            "smbclient //<IP>/<share>                              # Accedi a una share",
-            "smbmap -H <IP>                                       # Mappa permessi READ/WRITE",
-            "smbmap -H <IP> -u 'user' -p 'pass'                   # Con credenziali",
+            "# === ELENCO SHARE ===",
+            "smbclient -N -L //<IP>                               # Elenca share (null session, senza password)",
+            "smbclient //<IP>/<share>                              # Accedi a una share specifica",
+            "  > !cat flag.txt                                    # '!' esegue comandi sul TUO PC senza uscire",
+            "smbmap -H <IP>                                       # Mappa permessi READ/WRITE su ogni share",
+            "smbmap -H <IP> -u 'user' -p 'pass'                   # Con credenziali specifiche",
+            "",
+            "# === ENUMERAZIONE RPC (rpcclient) ===",
             "rpcclient -U '' <IP>                                  # Sessione RPC anonima",
-            "  > srvinfo                                          # Info server",
-            "  > enumdomusers                                     # Lista utenti dominio",
-            "  > netshareenumall                                   # Lista tutte le share",
-            "  > queryuser <RID>                                  # Info su utente specifico",
-            "nxc smb <IP> --shares -u '' -p ''                    # NetExec enum share",
-            "nxc smb <IP> -u 'admin' -p 'pass' --sam             # Dump hash SAM",
-            "enum4linux-ng.py <IP> -A                             # Enumerazione completa",
-            "sudo nmap -sV -sC -p139,445 <IP>                    # Nmap SMB scan",
-            "# Brute force RID (se enum bloccata):",
+            "  > srvinfo                                          # Info server (nome, versione OS)",
+            "  > enumdomains                                      # Elenca tutti i domini nella rete",
+            "  > querydominfo                                     # Info dominio, server e utenti",
+            "  > enumdomusers                                     # Lista utenti dominio con RID",
+            "  > netshareenumall                                   # Lista tutte le share (anche nascoste)",
+            "  > netsharegetinfo <share>                          # Dettagli su una share specifica",
+            "  > queryuser <RID>                                  # Info su utente specifico (per RID)",
+            "  > querygroup <RID>                                 # Info su gruppo specifico",
+            "",
+            "# === BRUTE FORCE RID (se enum bloccata) ===",
             "for i in $(seq 500 1100);do rpcclient -N -U '' <IP> -c \"queryuser 0x$(printf '%x\\n' $i)\" | grep 'User Name' && echo '';done",
+            "samrdump.py <IP>                                      # Alternativa Python (Impacket)",
+            "",
+            "# === TOOL AUTOMATICI ===",
+            "nxc smb <IP> --shares -u '' -p ''                    # NetExec: enum share anonime",
+            "nxc smb <IP> -u 'admin' -p 'pass' --sam             # Dump hash SAM (con admin)",
+            "nxc smb <SUBNET>/24 -u users.txt -p 'Password123!'  # Password spraying su subnet",
+            "nxc smb <IP> -u 'admin' -p 'pass' -x 'whoami'       # Esecuzione comandi remoti",
+            "enum4linux-ng.py <IP> -A                             # Enumerazione completa (porte, utenti, gruppi, share, policy password)",
+            "sudo nmap -sV -sC -p139,445 <IP>                    # Nmap SMB scan",
+            "",
+            "# === MONITORAGGIO (lato admin) ===",
+            "smbstatus                                             # Chi è connesso, versione protocollo, file lockati",
         ],
         "tool_consigliati": ["nmap", "enum4linux-ng", "smbmap", "crackmapexec", "impacket"],
     },
     "nfs": {
         "nome": "NFS — Network File System",
         "porte": "2049 (NFS), 111 (RPCBind/Portmapper)",
+        "categoria": "Trasferimento File",
         "descrizione": (
             "Protocollo per accedere a filesystem remoti come se fossero locali.\n"
-            "Usato principalmente su Linux/Unix. Non ha meccanismi di autenticazione propri."
+            "Usato principalmente su Linux/Unix. Non può comunicare con SMB.\n"
+            "\n"
+            "Non ha meccanismi di autenticazione propri — si fida del UID/GID del client.\n"
+            "NFSv4 usa porta unica 2049 TCP/UDP. Versioni precedenti necessitano anche di RPCBind (porta 111).\n"
+            "\n"
+            "Versioni: NFSv2 (UDP) → NFSv3 (file variabili) → NFSv4 (Kerberos, ACL, stateful) → NFSv4.1 (pNFS parallelo).\n"
+            "Usa ONC-RPC e formato XDR per compatibilità tra SO diversi."
         ),
+        "configurazione": [
+            "File export: /etc/exports (tabella filesystem condivisi)",
+            "Vedere config: cat /etc/exports",
+            "Riavviare dopo modifiche: exportfs -ra",
+            "Opzioni chiave: rw/ro, sync/async, secure/insecure, root_squash/no_root_squash",
+        ],
         "vulnerabilità": [
-            "no_root_squash — root remoto = root locale (privilege escalation)",
-            "Nessuna autenticazione interna — si fida del UID/GID del client",
-            "Export aperti a 0.0.0.0/0 — chiunque può montare le share",
-            "Disallineamento UID — utente sbagliato accede a file altrui",
-            "insecure — porte sopra 1024 permesse (bypass restrizioni)",
+            "no_root_squash — root remoto = root locale → privilege escalation immediata",
+            "Nessuna autenticazione interna — si fida del UID/GID del client (falsificabile)",
+            "Export aperti a 0.0.0.0/0 — chiunque può montare le share da qualsiasi IP",
+            "Disallineamento UID — utente 1001 su client ≠ utente 1001 su server → accessi incrociati",
+            "insecure — accetta connessioni da porte sopra 1024 (bypass restrizioni)",
+            "root_squash attivo → non puoi modificare file anche se root (attenzione alla verifica)",
         ],
         "enumerazione": [
-            "showmount -e <IP>                                    # Lista export (chi può accedere)",
+            "# === RILEVAMENTO ===",
+            "showmount -e <IP>                                    # Lista export: chi può accedere e a cosa",
             "sudo nmap -p111,2049 -sV -sC <IP>                   # Scan porte NFS/RPC",
-            "sudo nmap --script nfs* -sV -p111,2049 <IP>         # Script NSE per NFS",
+            "sudo nmap --script nfs* -sV -p111,2049 <IP>         # Script NSE: export, permessi, vuln note",
+            "",
+            "# === MONTARE UNA SHARE ===",
             "sudo mkdir -p /mnt/target_nfs                        # Crea punto di mount locale",
-            "sudo mount -t nfs <IP>:/<share> /mnt/target_nfs -o nolock  # Monta la share",
-            "ls -la /mnt/target_nfs                               # Esplora i file",
-            "ls -n /mnt/target_nfs                                # Mostra UID/GID numerici",
-            "tree /mnt/target_nfs                                 # Struttura completa",
-            "sudo umount /mnt/target_nfs                          # Smonta quando finito",
+            "sudo mount -t nfs <IP>:/<share> /mnt/target_nfs -o nolock  # Monta la share (-o nolock se NLM non attivo)",
+            "",
+            "# === ESPLORAZIONE ===",
+            "ls -la /mnt/target_nfs                               # Esplora con username/groupname",
+            "ls -n /mnt/target_nfs                                # Mostra UID/GID numerici (verifica permessi)",
+            "tree /mnt/target_nfs                                 # Struttura completa ad albero",
+            "",
+            "# === SMONTARE ===",
+            "cd ~ && sudo umount /mnt/target_nfs                  # Smonta quando finito (esci prima dalla dir!)",
         ],
         "tool_consigliati": ["nmap"],
     },
     "dns": {
         "nome": "DNS — Domain Name System",
         "porte": "53 (TCP/UDP)",
+        "categoria": "DNS & Ricognizione",
         "descrizione": (
             "Sistema per la risoluzione dei nomi di dominio in indirizzi IP.\n"
-            "Distribuito globalmente, non ha un database centrale."
+            "Distribuito globalmente, non ha un database centrale. Ogni server ha un ruolo:\n"
+            "\n"
+            "  Root Server (13 nel mondo) → Authoritative NS → Caching/Forwarding → Resolver locale\n"
+            "\n"
+            "Record DNS: A (IPv4), AAAA (IPv6), MX (mail), NS (nameserver), TXT (verifica/SPF/DKIM),\n"
+            "            CNAME (alias), PTR (reverse), SOA (info zona).\n"
+            "\n"
+            "Zona DNS ≠ Record DNS: la zona è il 'contenitore' (es. hackthebox.com) con tutti i record.\n"
+            "Il record è la singola riga (es. A → 142.250.184.206). Le zone hanno un SOA, i record no.\n"
+            "\n"
+            "DNS viaggia in chiaro per default. Soluzioni: DoT (DNS over TLS), DoH (DNS over HTTPS), DNSCrypt.\n"
+            "Il browser cerca prima in /etc/hosts, poi contatta i DNS server."
         ),
+        "configurazione": [
+            "Server comune: BIND9 — config in named.conf (diviso in opzioni + zone)",
+            "File locali: named.conf.local, named.conf.options, named.conf.log",
+            "Vedere zone: cat /etc/bind/named.conf.local",
+            "Zone file: cat /etc/bind/db.domain.com (descrive una zona completa, necessita SOA + NS)",
+            "Reverse zone: cat /etc/bind/db.10.129.14 (record PTR per IP→dominio)",
+            "Se zona mancante/corrotta il server risponde SERVFAIL",
+        ],
         "vulnerabilità": [
-            "Zone Transfer (AXFR) aperto — scarichi l'intera zona DNS",
-            "allow-recursion aperto — DNS amplification attack (DDoS)",
-            "allow-query aperto a tutti — informazioni esposte",
-            "DNS in chiaro — query intercettabili (senza DoT/DoH)",
-            "Subdomain takeover — sottodomini che puntano a risorse abbandonate",
+            "Zone Transfer (AXFR) aperto — scarichi l'intera zona DNS con tutti i sottodomini",
+            "allow-recursion aperto a tutti — DNS amplification attack (DDoS reflection)",
+            "allow-query senza restrizioni — informazioni esposte a chiunque",
+            "DNS in chiaro — query intercettabili senza DoT/DoH (chiunque in rete vede i siti visitati)",
+            "Subdomain takeover — sottodomini che puntano a risorse abbandonate (es. vecchio S3 bucket)",
             "DNS cache poisoning — reindirizzamento a siti malevoli",
         ],
         "enumerazione": [
-            "dig any <dominio>                                    # Tutti i record",
-            "dig axfr @<DNS_SERVER> <dominio>                     # Zone transfer",
-            "dig ns <dominio>                                     # Name servers",
-            "dig mx <dominio>                                     # Mail servers",
-            "dig soa <dominio>                                    # Start of Authority",
+            "# === QUERY MANUALI CON dig ===",
+            "dig domain.com                                       # Record A (default)",
+            "dig domain.com A                                     # IPv4",
+            "dig domain.com AAAA                                  # IPv6",
+            "dig domain.com MX                                    # Mail servers",
+            "dig domain.com NS                                    # Name servers autoritativi",
+            "dig domain.com TXT                                   # Record TXT (SPF, DKIM, verifiche)",
+            "dig domain.com SOA                                   # Start of Authority (admin email, refresh)",
+            "dig domain.com ANY                                   # Tutti i record (spesso ignorato per RFC 8482)",
+            "dig @1.1.1.1 domain.com                              # Query a DNS specifico (Cloudflare)",
+            "dig +trace domain.com                                # Percorso risoluzione completo (root→TLD→auth)",
+            "dig -x 192.168.1.1                                   # Reverse lookup (IP→dominio)",
+            "dig +short domain.com                                # Solo la risposta, nient'altro",
+            "dig +noall +answer domain.com                        # Solo la sezione 'answer'",
             "dig CH TXT version.bind @<DNS_SERVER>                # Versione server DNS",
-            "dig +trace <dominio>                                 # Percorso risoluzione completo",
-            "dnsenum --dnsserver <IP> --enum -f <wordlist> <dominio>  # Enum + brute force",
-            "# Brute force sottodomini manuale:",
-            "for sub in $(cat wordlist.txt);do dig $sub.<dominio> @<IP> | grep -v ';\\|SOA' | sed -r '/^\\s*$/d' | grep $sub;done",
-            "# Fonti passive: crt.sh, subdomainfinder.c99.nl",
-            "curl -s 'https://crt.sh/?q=<dominio>&output=json' | jq -r '.[].name_value' | sort -u",
+            "",
+            "# === ZONE TRANSFER ===",
+            "dig axfr @<DNS_SERVER> <dominio>                     # Full zone transfer (se permesso)",
+            "",
+            "# === BRUTE FORCE SOTTODOMINI ===",
+            "# Manuale con bash + SecLists:",
+            "for sub in $(cat /usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt);do dig $sub.<dominio> @<IP> | grep -v ';\\|SOA' | sed -r '/^\\s*$/d' | grep $sub | tee -a subdomains.txt;done",
+            "",
+            "# Con dnsenum (automatico: AXFR + brute force + reverse + whois):",
+            "dnsenum --dnsserver <IP> --enum -p 0 -s 0 -o subdomains.txt -f /usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt <dominio>",
+            "",
+            "# Con gobuster (VHost fuzzing — trova virtual host nascosti):",
+            "gobuster vhost -u http://<dominio> -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt --append-domain",
+            "",
+            "# === FONTI PASSIVE (OSINT) ===",
+            "curl -s 'https://crt.sh/?q=<dominio>&output=json' | jq -r '.[].name_value' | sort -u  # Certificati SSL",
+            "# subdomainfinder.c99.nl — trova sottodomini da fonti pubbliche",
         ],
-        "tool_consigliati": ["nmap", "dnsenum", "gobuster", "theHarvester", "recon-ng"],
+        "tool_consigliati": ["nmap", "dnsenum", "gobuster", "theHarvester", "recon-ng", "whois", "seclists"],
     },
     "smtp": {
         "nome": "SMTP — Simple Mail Transfer Protocol",
-        "porte": "25 (standard), 587 (submission), 465 (SMTPS)",
+        "porte": "25 (standard), 587 (submission autenticata), 465 (SMTPS)",
+        "categoria": "Email",
         "descrizione": (
-            "Protocollo per l'invio di email. Spesso combinato con IMAP/POP3.\n"
-            "Trasmette dati in chiaro senza SSL/TLS."
+            "Protocollo per l'invio di email. Spesso combinato con IMAP/POP3 per la lettura.\n"
+            "Trasmette dati in chiaro senza SSL/TLS. ESMTP è la versione moderna con STARTTLS.\n"
+            "\n"
+            "Flusso email: MUA (client) → MSA (verifica auth) → MTA (postino, cerca DNS) → MDA (consegna) → Mailbox (POP3/IMAP)\n"
+            "\n"
+            "Meccanismi di sicurezza:\n"
+            "  SMTP-Auth: obbliga username+password prima di inviare\n"
+            "  STARTTLS: attiva crittografia TLS dopo la connessione\n"
+            "  SPF: specifica quali server possono inviare per un dominio\n"
+            "  DKIM: firma digitale sul messaggio (integrità)\n"
+            "  DMARC: policy che combina SPF+DKIM"
         ),
+        "configurazione": [
+            "Server comune: Postfix — config in /etc/postfix/main.cf",
+            "Vedere config: cat /etc/postfix/main.cf | grep -v '#' | sed -r '/^\\s*$/d'",
+        ],
         "vulnerabilità": [
-            "Open Relay (mynetworks=0.0.0.0/0) — chiunque può inviare email",
-            "VRFY/EXPN abilitati — enumerazione utenti validi",
+            "Open Relay (mynetworks=0.0.0.0/0) — chiunque nel mondo può inviare email dal server",
+            "VRFY/EXPN abilitati — enumerazione utenti validi sul server",
             "Dati in chiaro — credenziali intercettabili senza STARTTLS",
-            "Mancanza SPF/DKIM/DMARC — email spoofing facilissimo",
+            "Mancanza SPF/DKIM/DMARC — email spoofing facilissimo (phishing)",
             "Versioni obsolete di Postfix/Sendmail con exploit noti",
         ],
         "enumerazione": [
-            "sudo nmap -sV -sC -p25 <IP>                         # Scan SMTP",
-            "sudo nmap -p25 --script smtp-open-relay -v <IP>      # Check open relay",
-            "telnet <IP> 25                                       # Connessione manuale",
-            "  > EHLO mail1                                       # Inizia sessione",
-            "  > VRFY admin                                       # Verifica se utente esiste",
+            "# === SCAN ===",
+            "sudo nmap -sV -sC -p25 <IP>                         # Scan SMTP base",
+            "sudo nmap -p25 --script smtp-open-relay -v <IP>      # Verifica open relay",
+            "",
+            "# === CONNESSIONE MANUALE (telnet) ===",
+            "telnet <IP> 25                                       # Connessione diretta",
+            "  > EHLO mail1                                       # Inizia sessione (mostra funzionalità)",
+            "  > VRFY admin                                       # Verifica se utente esiste (code 252 = ambiguo)",
             "  > EXPN admin                                       # Espandi mailing list",
-            "  > MAIL FROM: <test@test.com>                       # Testa invio",
-            "  > RCPT TO: <admin@target.com>                      # Destinatario",
-            "# Enumerazione utenti con Metasploit:",
+            "  > MAIL FROM: <test@test.com>                       # Imposta mittente",
+            "  > RCPT TO: <admin@target.com>                      # Imposta destinatario",
+            "  > DATA                                             # Inizia corpo email (termina con '.')",
+            "  > RSET                                             # Annulla trasmissione (mantieni connessione)",
+            "  > QUIT                                             # Chiudi sessione",
+            "",
+            "# === ENUMERAZIONE UTENTI (Metasploit) ===",
             "msfconsole > search smtp_enum > use 0 > set RHOSTS <IP> > set USER_FILE wordlist.txt > run",
         ],
         "tool_consigliati": ["nmap", "theHarvester"],
@@ -540,109 +690,172 @@ VULN_DB: dict[str, dict] = {
     "imap-pop3": {
         "nome": "IMAP/POP3 — Protocolli di lettura email",
         "porte": "143 (IMAP), 110 (POP3), 993 (IMAPS), 995 (POP3S)",
+        "categoria": "Email",
         "descrizione": (
-            "IMAP sincronizza le email sul server (multi-dispositivo).\n"
-            "POP3 scarica le email in locale e le cancella dal server."
+            "IMAP: le email restano sul server e si sincronizzano su tutti i dispositivi in tempo reale.\n"
+            "POP3: scarica le email in locale e le cancella dal server. No sincronizzazione multi-device.\n"
+            "\n"
+            "IMAP è il più flessibile (cartelle, stato messaggi). POP3 è più semplice.\n"
+            "Entrambi viaggiano in chiaro sulle porte standard (143/110).\n"
+            "Le porte cifrate sono 993 (IMAPS) e 995 (POP3S).\n"
+            "\n"
+            "Per testing locale: pacchetti dovecot-imapd e dovecot-pop3d."
         ),
+        "configurazione": [
+            "Server comune: Dovecot",
+        ],
         "vulnerabilità": [
             "auth_debug_passwords=yes — password scritte nei log in chiaro!",
-            "auth_verbose_passwords=yes — password nei log",
-            "Autenticazione anonima (SASL ANONYMOUS)",
+            "auth_verbose_passwords=yes — password nei log (anche troncate)",
+            "Autenticazione anonima (SASL ANONYMOUS) — accesso senza credenziali",
             "Connessione in chiaro (porte 143/110) — credenziali sniffabili",
-            "Email con chiavi SSH o password in chiaro nel body",
+            "Email con chiavi SSH o password nel body → leggi FETCH BODY[TEXT]!",
         ],
         "enumerazione": [
-            "sudo nmap -sV -p110,143,993,995 -sC <IP>            # Scan tutte le porte",
+            "# === SCAN ===",
+            "sudo nmap -sV -p110,143,993,995 -sC <IP>            # Scan tutte le porte email",
+            "",
+            "# === CONNESSIONE CON curl ===",
             "curl -k 'imaps://<IP>' --user user:password           # Login IMAP con curl",
-            "curl -k 'imaps://<IP>' --user user:password -v        # Verbose (dettagli connessione)",
-            "openssl s_client -connect <IP>:imaps -crlf            # IMAP cifrato",
-            "openssl s_client -connect <IP>:pop3s                  # POP3 cifrato",
-            "# Comandi IMAP una volta connessi:",
-            "  1 LOGIN user password",
-            "  1 LIST \"\" *                                         # Lista cartelle",
+            "curl -k 'imaps://<IP>' --user user:password -v        # Verbose (dettagli TLS, banner)",
+            "curl -k 'imaps://<IP>/INBOX;UID=1' --user user:pass   # Leggi email specifica per UID",
+            "",
+            "# === CONNESSIONE CIFRATA ===",
+            "openssl s_client -connect <IP>:imaps -crlf            # IMAP over SSL",
+            "openssl s_client -connect <IP>:pop3s                  # POP3 over SSL",
+            "",
+            "# === COMANDI IMAP (dopo connessione) ===",
+            "  1 LOGIN user password                              # Autenticazione",
+            "  1 LIST \"\" *                                         # Lista tutte le cartelle",
             "  1 SELECT INBOX                                      # Seleziona inbox",
-            "  1 FETCH 1 (BODY[TEXT])                              # Leggi corpo email (CERCA CHIAVI SSH!)",
-            "  1 LOGOUT",
-            "# Comandi POP3:",
-            "  USER username > PASS password > LIST > RETR 1 > QUIT",
+            "  1 FETCH <ID> all                                   # Header + metadata email",
+            "  1 FETCH 1 (BODY[TEXT])                              # Corpo email → CERCA CHIAVI SSH!",
+            "  1 CLOSE                                             # Rimuovi email marcate come eliminate",
+            "  1 LOGOUT                                            # Disconnetti",
+            "",
+            "# === COMANDI POP3 ===",
+            "  USER username > PASS password > STAT > LIST > RETR 1 > DELE 1 > QUIT",
         ],
         "tool_consigliati": ["nmap"],
     },
     "snmp": {
         "nome": "SNMP — Simple Network Management Protocol",
         "porte": "161/UDP (query), 162/UDP (trap)",
+        "categoria": "Monitoraggio Rete",
         "descrizione": (
-            "Protocollo per monitorare e gestire dispositivi di rete.\n"
-            "SNMPv1/v2c usano community string in chiaro. SNMPv3 è cifrato ma raro."
+            "Protocollo per monitorare e gestire dispositivi di rete (router, switch, server, stampanti).\n"
+            "\n"
+            "Componenti: SNMP (trasporto) + MIB (dizionario dati del dispositivo) + OID (coordinate univoche per ogni dato).\n"
+            "Ogni OID è una catena di numeri (es. .1.3.6.1.2.1.1.1.0 = nome sistema).\n"
+            "Più la catena è lunga, più l'info è specifica.\n"
+            "\n"
+            "Versioni:\n"
+            "  SNMPv1: nessuna crittografia né auth reale. Tutto intercettabile.\n"
+            "  SNMPv2c: introduce la Community String (password in chiaro). La più diffusa.\n"
+            "  SNMPv3: username + password + crittografia. Sicura ma complessa da configurare.\n"
+            "\n"
+            "Trap (porta 162): notifiche automatiche dal dispositivo senza richiesta."
         ),
+        "configurazione": [
+            "Config: /etc/snmp/snmpd.conf",
+            "Vedere config: cat /etc/snmp/snmpd.conf | grep -v '#' | sed -r '/^\\s*$/d'",
+        ],
         "vulnerabilità": [
-            "Community string di default (public/private) — accesso totale",
-            "rwuser noauth — lettura/scrittura senza autenticazione",
-            "rwcommunity aperta — modifica OID tree senza limiti",
-            "SNMPv1/v2c in chiaro — community string intercettabile",
-            "Esposizione info: processi, software installati, utenti, config di rete",
+            "Community string di default (public/private) — accesso totale ai dati del dispositivo",
+            "rwuser noauth — lettura/scrittura su tutto l'albero OID senza autenticazione",
+            "rwcommunity aperta — modifica OID tree (config dispositivo) senza limiti",
+            "SNMPv1/v2c in chiaro — community string intercettabile con uno sniffer",
+            "Esposizione info: processi in esecuzione, software installati, utenti, config di rete completa",
         ],
         "enumerazione": [
-            "# Brute force community string:",
+            "# === BRUTE FORCE COMMUNITY STRING ===",
             "onesixtyone -c /usr/share/seclists/Discovery/SNMP/snmp.txt <IP>",
-            "# Una volta trovata la community string:",
-            "snmpwalk -v2c -c public <IP>                          # Estrai tutti gli OID",
-            "braa public@<IP>:.1.3.6.*                             # Scan parallelo (più veloce)",
+            "",
+            "# === ESTRAZIONE DATI (una volta trovata la community string) ===",
+            "snmpwalk -v2c -c public <IP>                          # Tutti gli OID (lento, uno per uno)",
+            "braa public@<IP>:.1.3.6.*                             # Scan parallelo (MOLTO più veloce)",
             "braa <community>@<IP>:.1.3.6.*                        # Con community personalizzata",
-            "sudo nmap -sU -p161 --script snmp-info <IP>           # Info SNMP con Nmap",
+            "",
+            "# === NMAP ===",
+            "sudo nmap -sU -p161 --script snmp-info <IP>           # Info SNMP base",
         ],
-        "tool_consigliati": ["nmap", "onesixtyone", "braa"],
+        "tool_consigliati": ["nmap", "onesixtyone", "braa", "seclists"],
     },
     "mysql": {
         "nome": "MySQL — Database Relazionale",
         "porte": "3306 (TCP)",
+        "categoria": "Database",
         "descrizione": (
             "Database relazionale open source. Architettura client-server.\n"
-            "Molto diffuso nelle applicazioni web (LAMP stack)."
+            "Molto diffuso nelle applicazioni web (LAMP stack: Linux + Apache + MySQL + PHP).\n"
+            "I client usano query SQL per accedere/modificare i dati."
         ),
+        "configurazione": [
+            "Installazione: sudo apt install mysql-server -y",
+            "Config: /etc/mysql/mysql.conf.d/mysqld.cnf",
+            "Vedere config: cat /etc/mysql/mysql.conf.d/mysqld.cnf | grep -v '#' | sed -r '/^\\s*$/d'",
+        ],
         "vulnerabilità": [
-            "Root senza password — accesso amministratore totale",
-            "debug/sql_warnings attivi — info strutturali per SQL injection",
-            "secure_file_priv mal configurato — lettura/scrittura file di sistema",
-            "Credenziali nel file di configurazione in chiaro",
-            "Versioni obsolete con exploit noti (es. CVE-2012-2122)",
+            "Root senza password — accesso amministratore totale al database",
+            "debug/sql_warnings attivi — messaggi dettagliati rivelano struttura DB (utile per SQL injection)",
+            "secure_file_priv mal configurato — lettura/scrittura file del sistema operativo via MySQL",
+            "Credenziali nel file di configurazione con permessi troppo aperti → password in chiaro",
+            "admin_address esposto su Internet → attaccabile da chiunque",
         ],
         "enumerazione": [
-            "sudo nmap -sV -sC -p3306 --script mysql* <IP>        # Scan + script NSE",
+            "# === SCAN ===",
+            "sudo nmap -sV -sC -p3306 --script mysql* <IP>        # Scan + tutti gli script NSE MySQL",
+            "",
+            "# === CONNESSIONE ===",
             "mysql -u root -h <IP>                                 # Tentativo senza password",
             "mysql -u root -p'P4SSw0rd' -h <IP>                   # Con password",
             "mysql -u root -p'P4SSw0rd' -h <IP> --skip-ssl        # Se SSL dà problemi",
-            "# Comandi utili una volta dentro:",
-            "  show databases;",
-            "  use <database>;",
-            "  show tables;",
-            "  show columns from <table>;",
-            "  select * from <table>;",
-            "  select host, unique_users from host_summary;        # (nel db sys)",
+            "",
+            "# === COMANDI UTILI DENTRO MYSQL ===",
+            "  show databases;                                     # Lista tutti i database",
+            "  use <database>;                                     # Seleziona un database",
+            "  show tables;                                        # Lista tabelle",
+            "  show columns from <table>;                          # Struttura di una tabella",
+            "  select * from <table>;                              # Tutti i dati",
+            "  select * from <table> where <col> = '<val>';        # Filtra per valore",
+            "  use sys; select host, unique_users from host_summary;  # Chi si connette da dove",
         ],
         "tool_consigliati": ["nmap"],
     },
     "mssql": {
         "nome": "MSSQL — Microsoft SQL Server",
         "porte": "1433 (TCP)",
+        "categoria": "Database",
         "descrizione": (
             "Database relazionale Microsoft, integrato con .NET e Active Directory.\n"
-            "Client principale: SSMS. Da Linux: mssqlclient.py (Impacket)."
+            "Client principale: SSMS (SQL Server Management Studio) — GUI per admin.\n"
+            "Da Linux: mssqlclient.py (Impacket) o mssql-cli.\n"
+            "\n"
+            "Database di sistema: master (config), model (template), msdb (job/backup), tempdb (dati temporanei).\n"
+            "ATTENZIONE: SSMS a volte salva le password in chiaro sul PC dell'admin!"
         ),
+        "configurazione": [],
         "vulnerabilità": [
-            "Utente sa con password debole o di default",
-            "Autenticazione Windows — accesso automatico con account rubato",
-            "xp_cmdshell abilitato — esecuzione comandi di sistema",
-            "Certificati non validati — intercettazione connessione",
+            "Utente sa (System Administrator) con password debole o di default",
+            "Autenticazione Windows — account rubato = accesso automatico al DB",
+            "xp_cmdshell abilitato — esecuzione comandi di sistema dal database → RCE",
+            "Certificati non validati — intercettazione connessione (MitM)",
             "SSMS salva password in chiaro sul PC dell'admin",
+            "Nessuna cifratura tra client e server per default",
         ],
         "enumerazione": [
-            "sudo nmap --script ms-sql-info,ms-sql-empty-password,ms-sql-xp-cmdshell,"
-            "ms-sql-config,ms-sql-ntlm-info,ms-sql-tables,ms-sql-hasdbaccess,"
-            "ms-sql-dac,ms-sql-dump-hashes "
-            "--script-args mssql.instance-port=1433,mssql.username=sa,mssql.password=,"
+            "# === SCAN COMPLETO CON NMAP ===",
+            "sudo nmap --script ms-sql-info,ms-sql-empty-password,ms-sql-xp-cmdshell,\\",
+            "ms-sql-config,ms-sql-ntlm-info,ms-sql-tables,ms-sql-hasdbaccess,\\",
+            "ms-sql-dac,ms-sql-dump-hashes \\",
+            "--script-args mssql.instance-port=1433,mssql.username=sa,mssql.password=,\\",
             "mssql.instance-name=MSSQLSERVER -sV -p 1433 <IP>",
-            "python3 mssqlclient.py Administrator@<IP> -windows-auth  # Impacket",
+            "",
+            "# === CONNESSIONE CON IMPACKET ===",
+            "python3 mssqlclient.py Administrator@<IP> -windows-auth  # Auth Windows",
+            "python3 mssqlclient.py sa@<IP>                            # Auth SQL diretta",
+            "",
+            "# === NETEXEC ===",
             "nxc mssql <IP> -u 'sa' -p 'password' --query 'SELECT @@version;'",
         ],
         "tool_consigliati": ["nmap", "impacket", "crackmapexec"],
@@ -650,131 +863,213 @@ VULN_DB: dict[str, dict] = {
     "oracle-tns": {
         "nome": "Oracle TNS — Transparent Network Substrate",
         "porte": "1521 (TCP)",
+        "categoria": "Database",
         "descrizione": (
             "Protocollo di comunicazione tra applicazioni e database Oracle.\n"
-            "Il Listener accetta connessioni sulla porta 1521."
+            "Il Listener accetta connessioni sulla porta 1521.\n"
+            "\n"
+            "Config client: tnsnames.ora  |  Config server: listener.ora\n"
+            "Percorso config: $ORACLE_HOME/network/admin\n"
+            "\n"
+            "Per connettersi serve il SID (Service Identifier) — se non lo conosci, brute force."
         ),
+        "configurazione": [
+            "Config client: $ORACLE_HOME/network/admin/tnsnames.ora",
+            "Config server: $ORACLE_HOME/network/admin/listener.ora",
+        ],
         "vulnerabilità": [
-            "SID indovinabile — brute force del Service Identifier",
+            "SID indovinabile — brute force del Service Identifier con Nmap",
             "Credenziali di default (scott/tiger, sys/change_on_install)",
-            "utlfile — upload file sul server (web shell)",
-            "sysdba senza restrizioni — privilege escalation",
-            "Hash password estraibili da sys.user$",
+            "utlfile — upload file sul server (web shell in /var/www/html o C:\\inetpub\\wwwroot)",
+            "sysdba senza restrizioni — 'as sysdba' bypassa i controlli → privilege escalation",
+            "Hash password estraibili da sys.user$ → crackabili offline",
         ],
         "enumerazione": [
-            "sudo nmap -p1521 -sV <IP> --open                     # Rileva Oracle",
+            "# === RILEVAMENTO ===",
+            "sudo nmap -p1521 -sV <IP> --open                     # Rileva Oracle TNS",
             "sudo nmap -p1521 --script oracle-sid-brute <IP>       # Brute force SID",
-            "./odat.py all -s <IP>                                 # Enumerazione completa ODAT",
-            "sqlplus <user>/<pass>@<IP>/<SID>                      # Login con sqlplus",
-            "sqlplus <user>/<pass>@<IP>/<SID> as sysdba            # Login come admin",
-            "# Una volta dentro:",
-            "  select * from user_role_privs;                      # Verifica privilegi",
-            "  select name, password from sys.user$;               # Dump hash password",
-            "# Upload file (web shell):",
+            "",
+            "# === ENUMERAZIONE CON ODAT ===",
+            "./odat.py all -s <IP>                                 # Enumerazione completa (trova user, vuln, SID)",
+            "",
+            "# === CONNESSIONE CON sqlplus ===",
+            "sqlplus <user>/<pass>@<IP>/<SID>                      # Login standard",
+            "sqlplus <user>/<pass>@<IP>/<SID> as sysdba            # Login come admin (privilege escalation!)",
+            "",
+            "# === COMANDI UTILI ===",
+            "  select table_name from all_tables;                  # Lista tutte le tabelle",
+            "  select * from user_role_privs;                      # Verifica i tuoi privilegi",
+            "  select name, password from sys.user$;               # Dump hash password di TUTTI gli utenti",
+            "",
+            "# === UPLOAD FILE (Web Shell) ===",
+            "# Linux:",
             "./odat.py utlfile -s <IP> -d <SID> -U <user> -P <pass> --sysdba --putFile /var/www/html shell.txt ./shell.txt",
+            "# Windows:",
+            "./odat.py utlfile -s <IP> -d <SID> -U <user> -P <pass> --sysdba --putFile C:\\\\inetpub\\\\wwwroot shell.txt ./shell.txt",
+            "curl -X GET http://<IP>/shell.txt                     # Verifica upload",
         ],
         "tool_consigliati": ["nmap", "odat"],
     },
     "ipmi": {
         "nome": "IPMI — Intelligent Platform Management Interface",
         "porte": "623 (UDP)",
+        "categoria": "Hardware & Management",
         "descrizione": (
-            "Interfaccia per gestire server da remoto (anche spenti).\n"
-            "Indipendente da CPU/BIOS/OS. HP=iLO, Dell=iDRAC, Supermicro=IPMI."
+            "Interfaccia per gestire server da remoto, ANCHE SE SPENTI (basta che siano attaccati alla corrente).\n"
+            "Indipendente da CPU, BIOS e sistema operativo — funziona tramite il BMC (Baseboard Management Controller).\n"
+            "\n"
+            "Nomi commerciali: HP = iLO, Dell = iDRAC, Supermicro = IPMI.\n"
+            "\n"
+            "Permette: accensione/spegnimento remoto, modifica BIOS, monitoraggio hardware (temp, ventole),\n"
+            "reinstallazione OS da remoto come se inserissi una chiavetta USB fisicamente."
         ),
+        "configurazione": [],
         "vulnerabilità": [
-            "Password di default — Dell: root/calvin, Supermicro: ADMIN/ADMIN",
-            "Difetto RAKP — il server invia l'hash della password PRIMA dell'auth!",
-            "Hash crackabili con hashcat -m 7300",
-            "Interfaccia web spesso esposta su Internet",
-            "Firmware raramente aggiornato",
+            "Password di default — Dell: root/calvin, Supermicro: ADMIN/ADMIN, HP iLO: bollino dietro il server",
+            "Difetto protocollo RAKP (vers. 2.0) — il server invia l'hash della password PRIMA dell'autenticazione!",
+            "Hash crackabili con hashcat -m 7300 (difetto di progettazione, non riparabile con aggiornamento)",
+            "Interfaccia web spesso esposta su Internet senza restrizioni",
+            "Firmware raramente aggiornato — vecchie CVE persistenti",
         ],
         "enumerazione": [
-            "sudo nmap -sU --script ipmi-version -p 623 <IP>      # Rileva IPMI",
-            "# Metasploit — versione IPMI:",
+            "# === RILEVAMENTO ===",
+            "sudo nmap -sU --script ipmi-version -p 623 <IP>      # Rileva versione IPMI",
+            "",
+            "# === METASPLOIT — versione IPMI ===",
             "msfconsole > use auxiliary/scanner/ipmi/ipmi_version > set RHOSTS <IP> > run",
-            "# Metasploit — dump hash (difetto RAKP):",
+            "",
+            "# === METASPLOIT — dump hash (sfrutta difetto RAKP) ===",
             "msfconsole > use auxiliary/scanner/ipmi/ipmi_dumphashes > set RHOSTS <IP> > run",
-            "# Crack hash con hashcat:",
-            "hashcat -m 7300 ipmi.txt -a 3 ?1?1?1?1?1?1?1?1 -1 ?d?u",
-            "hashcat -a 0 -m 7300 ipmi.txt /usr/share/wordlists/rockyou.txt",
+            "",
+            "# === CRACK HASH CON HASHCAT ===",
+            "hashcat -m 7300 ipmi.txt -a 3 ?1?1?1?1?1?1?1?1 -1 ?d?u  # Brute force con mask",
+            "hashcat -a 0 -m 7300 ipmi.txt /usr/share/wordlists/rockyou.txt  # Con wordlist",
         ],
         "tool_consigliati": ["nmap", "hashcat"],
     },
     "ssh": {
         "nome": "SSH — Secure Shell",
         "porte": "22 (TCP)",
+        "categoria": "Accesso Remoto",
         "descrizione": (
-            "Protocollo per connessioni remote cifrate.\n"
-            "6 metodi di autenticazione. SSH-1 è vulnerabile a MitM."
+            "Protocollo per connessioni remote cifrate. Standard per amministrazione Linux/Unix.\n"
+            "SSH-1 è insicuro (vulnerabile a MitM). SSH-2 è lo standard attuale.\n"
+            "\n"
+            "6 metodi di autenticazione:\n"
+            "  1. Password  2. Public Key  3. Host-based  4. Keyboard  5. Challenge-Response  6. GSSAPI (Kerberos)\n"
+            "\n"
+            "Chiavi SSH: la chiave privata (id_rsa) DEVE restare segreta.\n"
+            "Se trovi accesso a /home/user/.ssh/id_rsa puoi usarla per loggarti.\n"
+            "Alcune chiavi sono cifrate con passphrase → crackabili con ssh2john + JtR."
         ),
+        "configurazione": [
+            "Config server: /etc/ssh/sshd_config",
+            "Vedere config: cat /etc/ssh/sshd_config | grep -v '#' | sed -r '/^\\s*$/d'",
+        ],
         "vulnerabilità": [
-            "PermitRootLogin yes — accesso diretto come root",
-            "PermitEmptyPasswords yes — login senza password",
-            "Protocol 1 — crittografia obsoleta e vulnerabile",
+            "PermitRootLogin yes — accesso diretto come root da remoto",
+            "PermitEmptyPasswords yes — login senza password (devastante)",
+            "Protocol 1 — crittografia obsoleta, vulnerabile a MitM",
             "X11Forwarding yes — command injection in alcune versioni",
             "Password deboli — brute force con hydra/medusa",
-            "Chiavi private esposte (id_rsa senza passphrase)",
+            "Chiavi private esposte (id_rsa senza passphrase in share NFS/FTP/email)",
+            "DebianBanner yes — mostra versione OS esatta (aiuta a scegliere exploit)",
         ],
         "enumerazione": [
-            "./ssh-audit.py <IP>                                   # Audit configurazione SSH",
-            "ssh -v user@<IP>                                      # Connessione verbose",
-            "ssh -v user@<IP> -o PreferredAuthentications=password  # Forza auth password",
+            "# === AUDIT CONFIGURAZIONE ===",
+            "./ssh-audit.py <IP>                                   # Audit completo (cifrari, KEX, chiavi host)",
+            "ssh -v user@<IP>                                      # Connessione verbose (vedi metodi auth)",
+            "ssh -v user@<IP> -o PreferredAuthentications=password  # Forza autenticazione password",
             "sudo nmap -sV -p22 --script ssh* <IP>                 # Script NSE SSH",
-            "# Brute force (con hydra):",
+            "",
+            "# === BRUTE FORCE ===",
             "hydra -l root -P /usr/share/wordlists/rockyou.txt ssh://<IP>",
-            "# Crack chiave SSH protetta da passphrase:",
-            "ssh2john.py id_rsa > ssh.hash",
-            "john --wordlist=rockyou.txt ssh.hash",
+            "",
+            "# === CHIAVI SSH ===",
+            "# Se trovi una chiave privata (id_rsa):",
+            "chmod 600 id_rsa                                      # Permessi restrittivi (obbligatorio)",
+            "ssh root@<IP> -i id_rsa                               # Login con chiave rubata",
+            "",
+            "# Per cercare chiavi nel filesystem:",
+            "grep -rnE '^\\-{5}BEGIN [A-Z0-9]+ PRIVATE KEY\\-{5}$' /* 2>/dev/null",
+            "",
+            "# Se la chiave è cifrata con passphrase:",
+            "ssh-keygen -yf id_rsa                                 # Verifica se ha passphrase",
+            "ssh2john.py id_rsa > ssh.hash                         # Estrai hash per JtR",
+            "john --wordlist=rockyou.txt ssh.hash                  # Crack passphrase",
+            "john ssh.hash --show                                  # Mostra risultato",
+            "",
+            "# === PERSISTENZA ===",
+            "# Se hai accesso in scrittura a /home/user/.ssh/:",
+            "# Aggiungi la TUA chiave pubblica in authorized_keys → accesso permanente",
         ],
-        "tool_consigliati": ["nmap", "ssh-audit", "john", "hashcat"],
+        "tool_consigliati": ["nmap", "ssh-audit", "john", "hashcat", "seclists"],
     },
     "rdp": {
         "nome": "RDP — Remote Desktop Protocol",
         "porte": "3389 (TCP)",
+        "categoria": "Accesso Remoto",
         "descrizione": (
-            "Protocollo Microsoft per il controllo remoto del desktop.\n"
-            "Dati cifrati ma spesso con certificati autofirmati (MitM possibile)."
+            "Protocollo Microsoft per il controllo remoto del desktop (GUI completa).\n"
+            "Dati cifrati ma spesso con certificati autofirmati → il PC non può verificare\n"
+            "se si sta connettendo al server giusto o a un impostore (MitM possibile)."
         ),
+        "configurazione": [],
         "vulnerabilità": [
-            "BlueKeep (CVE-2019-0708) — RCE pre-auth su vecchi Windows",
-            "Certificati autofirmati — MitM attack",
-            "NLA disabilitato — attacchi brute force facilitati",
+            "BlueKeep (CVE-2019-0708) — RCE pre-auth su vecchi Windows (XP, 7, Server 2008)",
+            "Certificati autofirmati — MitM attack (intercettazione desktop remoto)",
+            "NLA disabilitato — attacchi brute force facilitati (nessun pre-auth)",
             "Credenziali deboli — brute force con hydra/nxc",
             "Session hijacking — furto sessioni RDP attive",
         ],
         "enumerazione": [
+            "# === SCAN ===",
             "nmap -sV -sC -p3389 --script rdp* <IP>               # Scan + script RDP",
-            "nmap -sV -sC -p3389 --packet-trace --disable-arp-ping -n <IP>",
-            "./rdp-sec-check.pl <IP>                               # Verifica sicurezza RDP",
-            "nxc rdp <IP> -u 'admin' -p 'password'                 # Verifica credenziali",
-            "nxc rdp <SUBNET>/24 -u users.txt -p 'Password123!'   # Password spraying",
-            "# Connessione RDP:",
+            "nmap -sV -sC -p3389 --packet-trace --disable-arp-ping -n <IP>  # Dettagliato",
+            "",
+            "# === VERIFICA SICUREZZA ===",
+            "./rdp-sec-check.pl <IP>                               # Check cifrari, NLA, auth level",
+            "",
+            "# === VERIFICA CREDENZIALI ===",
+            "nxc rdp <IP> -u 'admin' -p 'password'                 # Singolo tentativo",
+            "nxc rdp <SUBNET>/24 -u users.txt -p 'Password123!'   # Password spraying su rete",
+            "",
+            "# === CONNESSIONE ===",
             "xfreerdp /u:user /p:'password' /v:<IP> /cert:ignore /dynamic-resolution +clipboard",
+            "# Opzioni utili: /drive:share,/tmp (monta cartella locale) /sec:tls (forza TLS)",
         ],
         "tool_consigliati": ["nmap", "rdp-sec-check", "crackmapexec"],
     },
     "winrm": {
         "nome": "WinRM — Windows Remote Management",
         "porte": "5985 (HTTP), 5986 (HTTPS)",
+        "categoria": "Accesso Remoto",
         "descrizione": (
-            "Protocollo Microsoft per esecuzione comandi remoti via riga di comando.\n"
-            "Basato su WS-Management. Usato per amministrazione PowerShell remota."
+            "Protocollo Microsoft per esecuzione comandi remoti via riga di comando (PowerShell).\n"
+            "Basato su WS-Management. A differenza di RDP, non mostra il desktop — solo terminale.\n"
+            "Porta 5985 (HTTP, in chiaro!) e 5986 (HTTPS, cifrato)."
         ),
+        "configurazione": [],
         "vulnerabilità": [
-            "Credenziali deboli — accesso shell completa",
-            "Pass-the-Hash — autenticazione con hash NTLM rubato",
-            "HTTP (5985) in chiaro — credenziali intercettabili",
-            "Accesso diretto a PowerShell — esecuzione codice arbitrario",
+            "Credenziali deboli — shell PowerShell completa con accesso admin",
+            "Pass-the-Hash — autenticazione con hash NTLM rubato (non serve la password in chiaro)",
+            "HTTP (5985) in chiaro — credenziali intercettabili sulla rete",
+            "Accesso diretto a PowerShell — esecuzione codice arbitrario, download malware",
         ],
         "enumerazione": [
+            "# === SCAN ===",
             "nmap -sV -sC -p5985,5986 --disable-arp-ping -n <IP>  # Scan porte WinRM",
-            "nxc winrm <IP> -u 'user' -p 'password'               # Verifica credenziali",
-            "nxc winrm <IP> -u 'user' -p 'password' -x 'hostname' # Esegui comando",
-            "evil-winrm -i <IP> -u 'user' -p 'password'           # Shell interattiva",
-            "evil-winrm -i <IP> -u 'user' -H 'HASH_NTLM'         # Pass-the-Hash",
-            "# Una volta dentro:",
-            "  Get-LocalUser                                       # Lista utenti",
+            "",
+            "# === VERIFICA CREDENZIALI ===",
+            "nxc winrm <IP> -u 'user' -p 'password'               # Test login (Pwn3d! = admin locale!)",
+            "nxc winrm <IP> -u 'user' -p 'password' -x 'hostname' # Esegui comando remoto",
+            "",
+            "# === SHELL INTERATTIVA ===",
+            "evil-winrm -i <IP> -u 'user' -p 'password'           # Shell PowerShell completa",
+            "evil-winrm -i <IP> -u 'user' -H 'HASH_NTLM'         # Pass-the-Hash (senza password!)",
+            "",
+            "# === COMANDI UTILI DENTRO LA SHELL ===",
+            "  Get-LocalUser                                       # Lista utenti locali Windows",
             "  Get-LocalGroup                                      # Lista gruppi",
             "  Get-Process                                         # Processi attivi",
         ],
@@ -783,20 +1078,27 @@ VULN_DB: dict[str, dict] = {
     "wmi": {
         "nome": "WMI — Windows Management Instrumentation",
         "porte": "135 (TCP)",
+        "categoria": "Accesso Remoto",
         "descrizione": (
-            "Insieme di strumenti per gestire qualsiasi impostazione di Windows.\n"
-            "Permette lettura/modifica RAM, processi, software, configurazioni da remoto."
+            "Insieme di strumenti per gestire qualsiasi impostazione di Windows da remoto:\n"
+            "RAM, processi, software installati, configurazioni, servizi.\n"
+            "Porta TCP 135. Usa wmiexec.py di Impacket per connettersi da Linux.\n"
+            "Spesso non monitorato dai sistemi di difesa → attività difficile da rilevare."
         ),
+        "configurazione": [],
         "vulnerabilità": [
-            "Credenziali admin — controllo totale del sistema",
-            "Esecuzione comandi remoti — RCE immediata",
-            "Spesso non monitorato — attività difficile da rilevare",
+            "Credenziali admin — controllo totale del sistema Windows",
+            "Esecuzione comandi remoti — RCE immediata con qualsiasi utente privilegiato",
+            "Spesso non monitorato da IDS/SIEM — attività invisibile nei log standard",
         ],
         "enumerazione": [
-            "python3 wmiexec.py user:'password'@<IP> 'hostname'    # Impacket",
-            "python3 wmiexec.py user:'password'@<IP> 'whoami'",
-            "python3 wmiexec.py user:'password'@<IP> 'ipconfig /all'",
-            "nxc smb <IP> -u 'user' -p 'password' -x 'whoami'     # Via NetExec",
+            "# === CONNESSIONE CON IMPACKET ===",
+            "python3 wmiexec.py user:'password'@<IP> 'hostname'    # Esegui comando remoto",
+            "python3 wmiexec.py user:'password'@<IP> 'whoami'      # Chi sono sul target?",
+            "python3 wmiexec.py user:'password'@<IP> 'ipconfig /all'  # Configurazione rete completa",
+            "",
+            "# === CON NETEXEC ===",
+            "nxc smb <IP> -u 'user' -p 'password' -x 'whoami'     # Esecuzione via SMB/WMI",
         ],
         "tool_consigliati": ["impacket", "crackmapexec"],
     },
@@ -818,6 +1120,8 @@ VULN_ALIASES: dict[str, str] = {
     "rpc": "smb",
     "ftps": "ftp",
     "tftp": "ftp",
+    "sftp": "ftp",
+    "vsftpd": "ftp",
     "bind": "dns",
     "bind9": "dns",
     "nslookup": "dns",
@@ -846,11 +1150,15 @@ def cmd_vuln(args: argparse.Namespace, state: ConsoleState | None = None) -> int
     raw = " ".join(args.protocol) if isinstance(args.protocol, list) else args.protocol
     key = normalize(raw)
 
-    if key == "list":
+    if key in {"list", "*", "all"}:
         print("\nProtocolli disponibili per 'vuln':\n")
-        for proto_key, proto_data in VULN_DB.items():
-            print(f"  {proto_key:<14} {proto_data['nome']}")
-        print(f"\n  Alias supportati: {', '.join(sorted(VULN_ALIASES.keys()))}")
+        for cat_name, cat_protos in VULN_CATEGORIES.items():
+            print(f"  [{cat_name}]")
+            for proto_key in cat_protos:
+                proto_data = VULN_DB[proto_key]
+                print(f"    {proto_key:<14} {proto_data['nome']:<45} Porte: {proto_data['porte']}")
+            print()
+        print(f"  Alias supportati: {', '.join(sorted(VULN_ALIASES.keys()))}")
         print()
         return 0
 
@@ -862,19 +1170,24 @@ def cmd_vuln(args: argparse.Namespace, state: ConsoleState | None = None) -> int
         return 1
 
     proto = VULN_DB[key]
-    sep = "=" * 60
+    sep = "=" * 70
 
     text_parts = [
         f"\n{sep}",
         f"  {proto['nome']}",
         f"  Porte: {proto['porte']}",
+        f"  Categoria: {proto.get('categoria', 'N/D')}",
         sep,
         "",
         proto["descrizione"],
-        "",
-        "--- VULNERABILITÀ COMUNI ---",
-        "",
     ]
+
+    if proto.get("configurazione"):
+        text_parts.extend(["", "--- CONFIGURAZIONE ---", ""])
+        for c in proto["configurazione"]:
+            text_parts.append(f"  {c}")
+
+    text_parts.extend(["", "--- VULNERABILITÀ COMUNI ---", ""])
     for v in proto["vulnerabilità"]:
         text_parts.append(f"  • {v}")
 
