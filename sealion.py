@@ -211,7 +211,7 @@ def resolve_target(target: str | None, state: ConsoleState | None) -> ToolEntry 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="Console", add_help=False)
+    parser = argparse.ArgumentParser(prog="slconsole", add_help=False)
     parser.add_argument("-h", "--help", action="store_true")
     parser.add_argument("--version", action="store_true")
     subparsers = parser.add_subparsers(dest="command")
@@ -230,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_console_command(line: str) -> list[str]:
     tokens = shlex.split(line)
-    if tokens and tokens[0].lower() == "sealionconsole":
+    if tokens and tokens[0].lower() in {"slconsole", "sealion", "sealionconsole"}:
         return tokens[1:]
     return tokens
 
@@ -282,7 +282,7 @@ def run_console() -> int:
     print("Digita 'help' per i comandi, 'exit' per uscire.")
     while True:
         try:
-            prompt = f"\033[94mConsole({state.current_tool.name})> \033[0m" if state.current_tool else "\033[94mslc> \033[0m"
+            prompt = f"\033[94mConsole({state.current_tool.name})> \033[0m" if state.current_tool else "\033[94mslconsole> \033[0m"
             line = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             print()
