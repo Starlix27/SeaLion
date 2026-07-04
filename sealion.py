@@ -24,6 +24,7 @@ ASCII_FILE = Path(__file__).with_name("ascii-art.txt")
 PROJECT_ROOT = Path(__file__).resolve().parent
 TOOL_ROOT = PROJECT_ROOT / "tool"
 VULN_ROOT = PROJECT_ROOT / "vuln"
+NOTES_ROOT = PROJECT_ROOT / "notes"
 INSTALL_ROOT = Path.home() / ".sealionconsole" / "tools"
 USER_BIN = Path.home() / ".local" / "bin"
 
@@ -39,7 +40,11 @@ class ToolEntry:
 @dataclass
 class ConsoleState:
     current_tool: ToolEntry | None = None
+    current_vuln: str | None = None
     last_search_results: list[ToolEntry] = field(default_factory=list)
+    last_vuln_tools: list[str] = field(default_factory=list)
+    _find_results: list = field(default_factory=list)
+    _find_query: str = ""
 
 
 REPO_URL = "https://github.com/Starlix27/SeaLion.git"
@@ -134,7 +139,10 @@ def print_help_text() -> None:
     print("  install [nome]     Installa il tool selezionato o specificato")
     print("  vuln <protocollo>  Mostra vulnerabilità e tool per un protocollo")
     print("  vuln list          Elenca i protocolli disponibili")
-    print("  vuln *             Elenca i protocolli disponibili") 
+    print("  vuln *             Elenca i protocolli disponibili")
+    print("  notes <argomento>  Mostra una nota/guida (es. footprinting)")
+    print("  notes list         Elenca le note disponibili")
+    print("  find <parola>      Cerca un testo in vuln, tool e notes")
     print("  help               Mostra questo aiuto")
     print("  back               Torna alla console principale")
     print("  exit               Esci da " + APP_NAME)
@@ -223,9 +231,13 @@ def resolve_target(target: str | None, state: ConsoleState | None) -> ToolEntry 
     if target is None:
         return state.current_tool if state is not None else None
 
-    if target.isdigit():
+    if target.isdigit() and state is not None:
+        if state.current_vuln and state.last_vuln_tools:
+            index = int(target) - 1
+            if 0 <= index < len(state.last_vuln_tools):
+                return find_tool(state.last_vuln_tools[index])
         tools = discover_tools()
-        if state is not None and state.last_search_results:
+        if state.last_search_results:
             tools = state.last_search_results
         index = int(target) - 1
         if 0 <= index < len(tools):
@@ -249,6 +261,10 @@ def build_parser() -> argparse.ArgumentParser:
     search_p.add_argument("query", nargs="+")
     vuln_p = subparsers.add_parser("vuln")
     vuln_p.add_argument("protocol", nargs="+")
+    notes_p = subparsers.add_parser("notes")
+    notes_p.add_argument("topic", nargs="+")
+    find_p = subparsers.add_parser("find")
+    find_p.add_argument("query", nargs="+")
     return parser
 
 
@@ -291,6 +307,8 @@ def run_command(argv: list[str], state: ConsoleState | None = None) -> int:
         "back": cmd_back,
         "search": cmd_search,
         "vuln": cmd_vuln,
+        "notes": cmd_notes,
+        "find": cmd_find,
     }
     handler = handlers.get(args.command)
     if handler is None:
@@ -306,7 +324,7 @@ def run_console() -> int:
     print("Digita 'help' per i comandi, 'exit' per uscire.")
     while True:
         try:
-            prompt = f"\033[94mConsole({state.current_tool.name})> \033[0m" if state.current_tool else "\033[94mslconsole> \033[0m"
+            prompt = f"\033[94mConsole({state.current_tool.name})> \033[0m" if state.current_tool else f"\033[94mslconsole({state.current_vuln})> \033[0m" if state.current_vuln else "\033[94mslconsole> \033[0m"
             line = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             print()
@@ -326,6 +344,8 @@ def run_console() -> int:
             continue
         if lowered == "back":
             state.current_tool = None
+            state.current_vuln = None
+            state.last_vuln_tools = []
             print("Tornato alla console principale.")
             continue
 
@@ -339,7 +359,7 @@ def run_console() -> int:
                 print(f"Installazione terminata con errore (codice {rc}).")
             continue
 
-        known_commands = {"list", "install", "use", "search", "vuln", "back", "help", "?", "--version", "-h", "--help"}
+        known_commands = {"list", "install", "use", "search", "vuln", "notes", "find", "back", "help", "?", "--version", "-h", "--help"}
         if argv[0] not in known_commands:
             print("Comando non riconosciuto. Digita 'help' per i comandi.")
             continue
@@ -449,6 +469,8 @@ def cmd_use(args: argparse.Namespace, state: ConsoleState | None = None) -> int:
         print(f"Tool non trovato: {args.target}", file=sys.stderr)
         return 1
     state.current_tool = tool
+    state.current_vuln = None
+    state.last_vuln_tools = []
     print_tool_context(tool)
     return 0
 
@@ -457,6 +479,8 @@ def cmd_back(args: argparse.Namespace, state: ConsoleState | None = None) -> int
     if state is None:
         return 0
     state.current_tool = None
+    state.current_vuln = None
+    state.last_vuln_tools = []
     print("Tornato alla console principale.")
     return 0
 
@@ -519,10 +543,49 @@ VULN_NAMES: dict[str, str] = {
 }
 
 
+NOTES_CATEGORIES: dict[str, list[str]] = {
+    "Metodologia": ["footprinting", "info-gathering"],
+    "Offensive": ["shells", "password-cracking"],
+    "Protocolli": ["ssh-notes", "impacket-notes"],
+}
+
+NOTES_NAMES: dict[str, str] = {
+    "footprinting": "Footprinting — Metodologia di Enumerazione",
+    "info-gathering": "Information Gathering — Ricognizione",
+    "shells": "Shell & Post-Exploitation — Reverse, Bind, Web Shell, PrivEsc",
+    "password-cracking": "Password Cracking — JtR & Hashcat",
+    "ssh-notes": "SSH — Note Operative",
+    "impacket-notes": "Impacket — Toolkit Python per reti Windows",
+}
+
+
 def discover_vulns() -> list[str]:
     if not VULN_ROOT.is_dir():
         return []
     return sorted(p.stem for p in VULN_ROOT.glob("*.md"))
+
+
+def discover_notes() -> list[str]:
+    if not NOTES_ROOT.is_dir():
+        return []
+    return sorted(p.stem for p in NOTES_ROOT.glob("*.md"))
+
+
+def _extract_vuln_tools(md_text: str) -> list[str]:
+    tools: list[str] = []
+    in_section = False
+    for line in md_text.splitlines():
+        if line.startswith("## Tool consigliati"):
+            in_section = True
+            continue
+        if in_section:
+            if line.startswith("## "):
+                break
+            stripped = line.strip()
+            if stripped.startswith("- **") and "**" in stripped[4:]:
+                name = stripped[4:stripped.index("**", 4)]
+                tools.append(name)
+    return tools
 
 
 def cmd_vuln(args: argparse.Namespace, state: ConsoleState | None = None) -> int:
@@ -564,7 +627,178 @@ def cmd_vuln(args: argparse.Namespace, state: ConsoleState | None = None) -> int
         print("Usa 'vuln list' per vedere i protocolli disponibili.")
         return 1
 
-    render_markdown(vuln_file.read_text(encoding="utf-8", errors="replace"))
+    md_text = vuln_file.read_text(encoding="utf-8", errors="replace")
+    render_markdown(md_text)
+
+    if state is not None:
+        state.current_vuln = key
+        state.current_tool = None
+        tools = _extract_vuln_tools(md_text)
+        state.last_vuln_tools = tools
+        if tools:
+            print(f"\nUsa 'use <num>' per selezionare un tool consigliato (1-{len(tools)}).")
+
+    return 0
+
+
+def cmd_notes(args: argparse.Namespace, state: ConsoleState | None = None) -> int:
+    raw = " ".join(args.topic) if isinstance(args.topic, list) else args.topic
+    key = normalize(raw)
+
+    if key in {"list", "*", "all"}:
+        md_parts = ["# Note disponibili\n"]
+        available = set(discover_notes())
+        for cat_name, cat_notes in NOTES_CATEGORIES.items():
+            cat_items = [n for n in cat_notes if n in available]
+            if not cat_items:
+                continue
+            md_parts.append(f"## {cat_name}\n")
+            md_parts.append("| Chiave | Nome |")
+            md_parts.append("|--------|------|")
+            for note_key in cat_items:
+                name = NOTES_NAMES.get(note_key, note_key)
+                md_parts.append(f"| `{note_key}` | {name} |")
+            md_parts.append("")
+        uncategorized = available - {n for ns in NOTES_CATEGORIES.values() for n in ns}
+        if uncategorized:
+            md_parts.append("## Altro\n")
+            md_parts.append("| Chiave | Nome |")
+            md_parts.append("|--------|------|")
+            for note_key in sorted(uncategorized):
+                name = NOTES_NAMES.get(note_key, note_key)
+                md_parts.append(f"| `{note_key}` | {name} |")
+            md_parts.append("")
+        render_markdown("\n".join(md_parts))
+        return 0
+
+    note_file = NOTES_ROOT / f"{key}.md"
+
+    if not note_file.exists():
+        print(f"Nota '{raw}' non trovata.", file=sys.stderr)
+        print("Usa 'notes list' per vedere le note disponibili.")
+        return 1
+
+    md_text = note_file.read_text(encoding="utf-8", errors="replace")
+    render_markdown(md_text)
+    return 0
+
+
+def _collect_find_matches(query: str) -> list[tuple[str, str, Path, list[str]]]:
+    """Return list of (source_type, label, file_path, context_lines) for matches."""
+    nq = normalize(query)
+    results: list[tuple[str, str, Path, list[str]]] = []
+
+    for vuln_file in sorted(VULN_ROOT.glob("*.md")) if VULN_ROOT.is_dir() else []:
+        text = vuln_file.read_text(encoding="utf-8", errors="replace")
+        if nq in text.lower():
+            ctx = _extract_context(text, nq)
+            label = VULN_NAMES.get(vuln_file.stem, vuln_file.stem)
+            results.append(("vuln", label, vuln_file, ctx))
+
+    for tool in discover_tools():
+        text = tool.help_file.read_text(encoding="utf-8", errors="replace")
+        if nq in text.lower():
+            ctx = _extract_context(text, nq)
+            results.append(("tool", tool.name, tool.help_file, ctx))
+
+    for note_file in sorted(NOTES_ROOT.glob("*.md")) if NOTES_ROOT.is_dir() else []:
+        text = note_file.read_text(encoding="utf-8", errors="replace")
+        if nq in text.lower():
+            ctx = _extract_context(text, nq)
+            label = NOTES_NAMES.get(note_file.stem, note_file.stem)
+            results.append(("notes", label, note_file, ctx))
+
+    return results
+
+
+def _extract_context(text: str, query_lower: str, context_lines: int = 1) -> list[str]:
+    """Return lines surrounding each match for preview."""
+    lines = text.splitlines()
+    matched: list[str] = []
+    for i, line in enumerate(lines):
+        if query_lower in line.lower():
+            start = max(0, i - context_lines)
+            end = min(len(lines), i + context_lines + 1)
+            snippet = " ".join(lines[start:end]).strip()
+            if len(snippet) > 120:
+                snippet = snippet[:117] + "..."
+            matched.append(snippet)
+            if len(matched) >= 3:
+                break
+    return matched
+
+
+def _render_highlighted(text: str, query: str) -> None:
+    """Print markdown text with query highlighted in blue."""
+    lower_q = query.lower()
+    for line in text.splitlines():
+        idx = line.lower().find(lower_q)
+        if idx >= 0:
+            ql = len(query)
+            highlighted = line[:idx] + f"\033[94;1m{line[idx:idx+ql]}\033[0m" + line[idx+ql:]
+            print(highlighted)
+        else:
+            print(line)
+
+
+def cmd_find(args: argparse.Namespace, state: ConsoleState | None = None) -> int:
+    query = " ".join(args.query) if isinstance(args.query, list) else args.query
+    if not query.strip():
+        print("Specifica una parola da cercare.", file=sys.stderr)
+        return 1
+
+    matches = _collect_find_matches(query)
+    if not matches:
+        print(f"Nessun risultato per '{query}'.")
+        return 0
+
+    type_labels = {"vuln": "vuln", "tool": "tool", "notes": "notes"}
+    print(f"\nCorrispondenze per '\033[94m{query}\033[0m' ({len(matches)} trovate):\n")
+    for i, (src, label, _, ctx) in enumerate(matches, 1):
+        tag = type_labels[src]
+        print(f"  [{i}] \033[90m[{tag}]\033[0m {label}")
+        for snippet in ctx[:2]:
+            print(f"       \033[2m{snippet}\033[0m")
+    print(f"\nUsa 'use <num>' per aprire la pagina con il termine evidenziato in blu.")
+    print("Digita il numero della pagina da aprire, oppure 'back' per uscire.\n")
+
+    if state is not None:
+        state._find_results = matches
+        state._find_query = query.strip()
+
+    if not sys.stdin.isatty():
+        return 0
+
+    while True:
+        try:
+            choice = input("\033[94mfind>\033[0m ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if choice.lower() in {"back", "q", "quit", "exit", ""}:
+            break
+
+        if not choice.isdigit():
+            print("Inserisci un numero o 'back'.")
+            continue
+
+        idx = int(choice) - 1
+        if idx < 0 or idx >= len(matches):
+            print(f"Scegli un numero tra 1 e {len(matches)}.")
+            continue
+
+        _, _, file_path, _ = matches[idx]
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+        print(f"\033[2J\033[H", end="")
+        _render_highlighted(text, query)
+        print(f"\n\033[90m--- Premi Invio per tornare alla lista ---\033[0m")
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
     return 0
 
 
