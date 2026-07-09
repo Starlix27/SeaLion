@@ -139,13 +139,13 @@ def _read_sealsay_message(argv: list[str]) -> str:
     return "SeaLion"
 
 
-def _render_sealsay_bubble(message: str) -> None:
+def _build_sealsay_bubble(message: str) -> list[str]:
     lines = message.splitlines() or [""]
     width = max(len(line) for line in lines)
-
-    print(f" {'_' * (width + 2)}")
+    bubble: list[str] = []
+    bubble.append(f" {'_' * (width + 2)}")
     if len(lines) == 1:
-        print(f"< {lines[0].ljust(width)} >")
+        bubble.append(f"< {lines[0].ljust(width)} >")
     else:
         for index, line in enumerate(lines):
             if index == 0:
@@ -154,13 +154,29 @@ def _render_sealsay_bubble(message: str) -> None:
                 left, right = "\\", "/"
             else:
                 left, right = "|", "|"
-            print(f"{left} {line.ljust(width)} {right}")
-    print(f" {'-' * (width + 2)}")
+            bubble.append(f"{left} {line.ljust(width)} {right}")
+    bubble.append(f" {'-' * (width + 2)}")
+    return bubble
 
 
 def print_sealsay(message: str) -> None:
-    _render_sealsay_bubble(message)
-    print(load_sealsay_art())
+    art_lines = load_sealsay_art().splitlines()
+    bubble_lines = _build_sealsay_bubble(message)
+
+    art_width = max(len(l) for l in art_lines) if art_lines else 0
+    bubble_height = len(bubble_lines)
+
+    mouth_row = 1
+    bubble_start = max(0, mouth_row - bubble_height)
+
+    total = max(len(art_lines), bubble_start + bubble_height)
+    for i in range(total):
+        art_part = art_lines[i] if i < len(art_lines) else ""
+        bubble_idx = i - bubble_start
+        if 0 <= bubble_idx < bubble_height:
+            print(f"{art_part:<{art_width}}  {bubble_lines[bubble_idx]}")
+        else:
+            print(art_part)
 
 
 def cmd_sealsay(args: argparse.Namespace, state: ConsoleState | None = None) -> int:
