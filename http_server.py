@@ -35,6 +35,28 @@ def get_default_ip() -> str:
         return "127.0.0.1"
 
 
+def discover_interfaces() -> list[tuple[str, str]]:
+    """Return list of (interface_name, ipv4_address) for non-loopback interfaces."""
+    results: list[tuple[str, str]] = []
+    try:
+        out = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in out.stdout.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 4:
+                iface = parts[1]
+                addr = parts[3].split("/")[0]
+                if addr != "127.0.0.1":
+                    results.append((iface, addr))
+    except Exception:
+        fallback = get_default_ip()
+        if fallback != "127.0.0.1":
+            results.append(("default", fallback))
+    return results
+
+
 UPGRADE_TEMPLATE = r"""#!/bin/bash
 # === slconsole shell upgrade ===
 # Metodo 1: socat (preferito — TTY piena)
