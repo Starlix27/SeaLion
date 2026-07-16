@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from shutil import get_terminal_size, which
 
-from http_server import start as _serve_start, stop as _serve_stop, status as _serve_status, fetch_tools as _serve_fetch, list_static as _serve_list_static
+from http_server import start as _serve_start, stop as _serve_stop, status as _serve_status, fetch_tools as _serve_fetch, list_static as _serve_list_static, discover_interfaces as _serve_discover_interfaces
 
 try:
     import readline  # type: ignore
@@ -1022,6 +1022,32 @@ def cmd_serve(args: argparse.Namespace, state: ConsoleState | None = None) -> in
         port = getattr(args, "port", 8000)
         lhost = getattr(args, "lhost", None)
         lport = getattr(args, "lport", 4444)
+
+        if lhost is None:
+            ifaces = _serve_discover_interfaces()
+            if not ifaces:
+                print("Nessuna interfaccia di rete trovata.", file=sys.stderr)
+                return 1
+            if len(ifaces) == 1:
+                lhost = ifaces[0][1]
+            else:
+                print("\n  Interfacce disponibili:\n")
+                for i, (name, addr) in enumerate(ifaces, 1):
+                    print(f"    [{i}] {name:<12s}  {addr}")
+                print()
+                while True:
+                    try:
+                        choice = input("  Scegli interfaccia [1]: ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        print()
+                        return 0
+                    if not choice:
+                        choice = "1"
+                    if choice.isdigit() and 1 <= int(choice) <= len(ifaces):
+                        lhost = ifaces[int(choice) - 1][1]
+                        break
+                    print(f"  Inserisci un numero da 1 a {len(ifaces)}.")
+
         print(_serve_start(port=port, lhost=lhost, lport=lport))
         return 0
     if action in {"off", "stop"}:
