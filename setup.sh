@@ -9,6 +9,16 @@ CMD_NAMES=("slconsole" "sealsay")
 echo "=== SeaLion Console — Setup ==="
 echo ""
 
+# Installa chafa se mancante (rendering GIF su Ctrl+C)
+if ! command -v chafa &>/dev/null; then
+    echo "[setup] Installazione chafa..."
+    if command -v apt &>/dev/null; then
+        sudo apt install -y chafa 2>/dev/null || echo "  chafa non installato (opzionale)"
+    elif command -v pacman &>/dev/null; then
+        sudo pacman -S --noconfirm chafa 2>/dev/null || true
+    fi
+fi
+
 # Assicura che sealion.py sia eseguibile
 chmod +x "$ENTRY"
 

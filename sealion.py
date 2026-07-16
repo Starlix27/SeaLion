@@ -5,6 +5,7 @@ import argparse
 import importlib.util
 import re
 import platform
+import select
 import textwrap
 import subprocess
 import sys
@@ -31,6 +32,7 @@ VULN_ROOT = PROJECT_ROOT / "vuln"
 NOTES_ROOT = PROJECT_ROOT / "notes"
 INSTALL_ROOT = Path.home() / ".sealionconsole" / "tools"
 USER_BIN = Path.home() / ".local" / "bin"
+GIF_FILE = PROJECT_ROOT / "assets" / "spinning.gif"
 
 
 @dataclass
@@ -58,13 +60,24 @@ def auto_update() -> None:
     if not (PROJECT_ROOT / ".git").is_dir():
         return
     try:
-        result = subprocess.run(
-            ["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", REPO_URL, "main"],
+        subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "fetch", REPO_URL, "main"],
             capture_output=True, text=True, timeout=15,
         )
-        out = result.stdout.strip()
-        if out and "Already up to date" not in out:
-            print(f"\033[92m[update]\033[0m {out.splitlines()[-1]}")
+        local = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "FETCH_HEAD"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        if local != remote:
+            subprocess.run(
+                ["git", "-C", str(PROJECT_ROOT), "reset", "--hard", "FETCH_HEAD"],
+                capture_output=True, text=True, timeout=15,
+            )
+            print(f"\033[92m[update]\033[0m Aggiornato a {remote[:7]}")
     except Exception:
         pass
 
@@ -224,6 +237,9 @@ def print_help_text() -> None:
     print("  help               Mostra questo aiuto")
     print("  back               Torna alla console principale")
     print("  exit               Esci da " + APP_NAME)
+    print()
+    print("  \033[1mESC\033[0m                Esci da " + APP_NAME)
+    print("  \033[1mCtrl+C\033[0m             \033[95m~spin~\033[0m")
 
 
 def get_install_dir(tool: ToolEntry) -> Path:
@@ -363,13 +379,204 @@ def parse_console_command(line: str) -> list[str]:
 
 
 def setup_readline() -> None:
-    if readline is None:
+    pass
+
+
+_COMPLETABLE = sorted(["sealsay", "list", "install", "use", "search", "vuln",
+                        "notes", "find", "back", "help", "serve", "exit"])
+_input_history: list[str] = []
+
+
+def _play_ctrlc_gif() -> None:
+    if not GIF_FILE.exists():
+        print("\033[93m[!]\033[0m GIF non trovata in assets/spinning.gif")
         return
+
+    cols, rows = get_terminal_size((80, 24))
+    h = max(10, rows - 2)
+
+    renderer = which("chafa") or which("img2txt")
+    if not renderer:
+        print("\033[93m[!]\033[0m Installa chafa per la GIF: sudo apt install chafa")
+        return
+
+    sys.stdout.write("\033[?1049h\033[H")
+    sys.stdout.flush()
+
     try:
-        readline.parse_and_bind("tab: complete")
-        readline.parse_and_bind("set editing-mode emacs")
-    except Exception:
-        pass
+        if "chafa" in renderer:
+            cmd = ["chafa", "-w", "9",
+                   "-s", f"{cols}x{h}", "--duration=inf", str(GIF_FILE)]
+            proc = subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
+            proc.wait()
+        else:
+            while True:
+                proc = subprocess.Popen(
+                    ["img2txt", "-W", str(cols), "-H", str(h), str(GIF_FILE)],
+                    stderr=subprocess.DEVNULL,
+                )
+                proc.wait()
+    except KeyboardInterrupt:
+        try:
+            proc.terminate()
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+    finally:
+        sys.stdout.write("\033[?1049l")
+        sys.stdout.flush()
+
+
+def _smart_input(prompt: str) -> str | None:
+    """Input interattivo: ESC=esci, Ctrl+C=GIF. Ritorna None su ESC."""
+    if not sys.stdin.isatty():
+        try:
+            return input(prompt)
+        except EOFError:
+            return None
+
+    import tty, termios
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    buf: list[str] = []
+    pos = 0
+    hist_idx = len(_input_history)
+    saved_buf: list[str] = []
+
+    def refresh() -> None:
+        text = "".join(buf)
+        sys.stdout.write(f"\r\033[K{prompt}{text}")
+        back = len(buf) - pos
+        if back > 0:
+            sys.stdout.write(f"\033[{back}D")
+        sys.stdout.flush()
+
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+
+            if ch == "\x1b":
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    ch2 = sys.stdin.read(1)
+                    if ch2 == "[":
+                        ch3 = sys.stdin.read(1)
+                        if ch3 == "A" and _input_history:
+                            if hist_idx > 0:
+                                if hist_idx == len(_input_history):
+                                    saved_buf = list(buf)
+                                hist_idx -= 1
+                                buf = list(_input_history[hist_idx])
+                                pos = len(buf)
+                                refresh()
+                        elif ch3 == "B":
+                            if hist_idx < len(_input_history):
+                                hist_idx += 1
+                                buf = list(saved_buf) if hist_idx == len(_input_history) else list(_input_history[hist_idx])
+                                pos = len(buf)
+                                refresh()
+                        elif ch3 == "C" and pos < len(buf):
+                            pos += 1
+                            sys.stdout.write("\033[C")
+                            sys.stdout.flush()
+                        elif ch3 == "D" and pos > 0:
+                            pos -= 1
+                            sys.stdout.write("\033[D")
+                            sys.stdout.flush()
+                        elif ch3 == "H":
+                            pos = 0
+                            refresh()
+                        elif ch3 == "F":
+                            pos = len(buf)
+                            refresh()
+                        elif ch3 == "3":
+                            if select.select([sys.stdin], [], [], 0.05)[0]:
+                                sys.stdin.read(1)
+                            if pos < len(buf):
+                                buf.pop(pos)
+                                refresh()
+                else:
+                    sys.stdout.write("\r\n")
+                    sys.stdout.flush()
+                    return None
+
+            elif ch == "\x03":
+                sys.stdout.write("\r\n")
+                sys.stdout.flush()
+                raise KeyboardInterrupt
+
+            elif ch in ("\r", "\n"):
+                sys.stdout.write("\r\n")
+                sys.stdout.flush()
+                line = "".join(buf)
+                if line.strip():
+                    _input_history.append(line)
+                return line
+
+            elif ch in ("\x7f", "\x08"):
+                if pos > 0:
+                    buf.pop(pos - 1)
+                    pos -= 1
+                    refresh()
+
+            elif ch == "\x04":
+                if not buf:
+                    sys.stdout.write("\r\n")
+                    sys.stdout.flush()
+                    return None
+
+            elif ch == "\x15":
+                buf = buf[pos:]
+                pos = 0
+                refresh()
+
+            elif ch == "\x0b":
+                buf = buf[:pos]
+                refresh()
+
+            elif ch == "\x17":
+                while pos > 0 and buf[pos - 1] == " ":
+                    buf.pop(pos - 1); pos -= 1
+                while pos > 0 and buf[pos - 1] != " ":
+                    buf.pop(pos - 1); pos -= 1
+                refresh()
+
+            elif ch == "\x01":
+                pos = 0
+                refresh()
+
+            elif ch == "\x05":
+                pos = len(buf)
+                refresh()
+
+            elif ch == "\x0c":
+                sys.stdout.write("\033[2J\033[H")
+                refresh()
+
+            elif ch == "\t":
+                partial = "".join(buf[:pos]).lstrip()
+                if partial and " " not in partial:
+                    matches = [c for c in _COMPLETABLE if c.startswith(partial.lower())]
+                    if len(matches) == 1:
+                        tail = matches[0][len(partial):] + " "
+                        for c in tail:
+                            buf.insert(pos, c); pos += 1
+                        refresh()
+                    elif matches:
+                        sys.stdout.write("\r\n  " + "  ".join(matches) + "\r\n")
+                        refresh()
+
+            elif 32 <= ord(ch) < 127:
+                buf.insert(pos, ch)
+                pos += 1
+                refresh()
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def run_command(argv: list[str], state: ConsoleState | None = None) -> int:
@@ -407,18 +614,22 @@ def run_command(argv: list[str], state: ConsoleState | None = None) -> int:
 
 
 def run_console() -> int:
-    setup_readline()
     state = ConsoleState()
     print_banner()
-    print("Digita 'help' per i comandi, 'exit' per uscire.")
+    print("Digita 'help' per i comandi, \033[1mESC\033[0m per uscire.")
     while True:
+        prompt = f"\033[94mConsole({state.current_tool.name})> \033[0m" if state.current_tool else f"\033[94mslconsole({state.current_vuln})> \033[0m" if state.current_vuln else "\033[94mslconsole> \033[0m"
         try:
-            prompt = f"\033[94mConsole({state.current_tool.name})> \033[0m" if state.current_tool else f"\033[94mslconsole({state.current_vuln})> \033[0m" if state.current_vuln else "\033[94mslconsole> \033[0m"
-            line = input(prompt).strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
+            line = _smart_input(prompt)
+        except KeyboardInterrupt:
+            _play_ctrlc_gif()
+            continue
+
+        if line is None:
+            print("Arrivederci!")
             return 0
 
+        line = line.strip()
         if not line:
             continue
 
