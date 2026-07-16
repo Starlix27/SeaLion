@@ -478,49 +478,44 @@ def _smart_input(prompt: str) -> str | None:
             ch = sys.stdin.read(1)
 
             if ch == "\x1b":
-                if select.select([sys.stdin], [], [], 0.15)[0]:
-                    ch2 = sys.stdin.read(1)
-                    if ch2 == "[":
-                        ch3 = sys.stdin.read(1)
-                        if ch3 == "A" and _input_history:
-                            if hist_idx > 0:
-                                if hist_idx == len(_input_history):
-                                    saved_buf = list(buf)
-                                hist_idx -= 1
-                                buf = list(_input_history[hist_idx])
-                                pos = len(buf)
-                                refresh()
-                        elif ch3 == "B":
-                            if hist_idx < len(_input_history):
-                                hist_idx += 1
-                                buf = list(saved_buf) if hist_idx == len(_input_history) else list(_input_history[hist_idx])
-                                pos = len(buf)
-                                refresh()
-                        elif ch3 == "C" and pos < len(buf):
-                            pos += 1
-                            sys.stdout.write("\033[C")
-                            sys.stdout.flush()
-                        elif ch3 == "D" and pos > 0:
-                            pos -= 1
-                            sys.stdout.write("\033[D")
-                            sys.stdout.flush()
-                        elif ch3 == "H":
-                            pos = 0
-                            refresh()
-                        elif ch3 == "F":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A" and _input_history:
+                        if hist_idx > 0:
+                            if hist_idx == len(_input_history):
+                                saved_buf = list(buf)
+                            hist_idx -= 1
+                            buf = list(_input_history[hist_idx])
                             pos = len(buf)
                             refresh()
-                        elif ch3 == "3":
-                            if select.select([sys.stdin], [], [], 0.15)[0]:
-                                sys.stdin.read(1)
-                            if pos < len(buf):
-                                buf.pop(pos)
-                                refresh()
-                    elif ch2 == "\x1b":
-                        sys.stdout.write("\r\n")
+                    elif ch3 == "B":
+                        if hist_idx < len(_input_history):
+                            hist_idx += 1
+                            buf = list(saved_buf) if hist_idx == len(_input_history) else list(_input_history[hist_idx])
+                            pos = len(buf)
+                            refresh()
+                    elif ch3 == "C" and pos < len(buf):
+                        pos += 1
+                        sys.stdout.write("\033[C")
                         sys.stdout.flush()
-                        return None
-                else:
+                    elif ch3 == "D" and pos > 0:
+                        pos -= 1
+                        sys.stdout.write("\033[D")
+                        sys.stdout.flush()
+                    elif ch3 == "H":
+                        pos = 0
+                        refresh()
+                    elif ch3 == "F":
+                        pos = len(buf)
+                        refresh()
+                    elif ch3 == "3":
+                        if select.select([sys.stdin], [], [], 0.2)[0]:
+                            sys.stdin.read(1)
+                        if pos < len(buf):
+                            buf.pop(pos)
+                            refresh()
+                elif ch2 == "\x1b":
                     sys.stdout.write("\r\n")
                     sys.stdout.flush()
                     return None
