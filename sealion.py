@@ -897,6 +897,7 @@ NOTES_CATEGORIES: dict[str, list[str]] = {
     "Metodologia": ["footprinting", "info-gathering"],
     "Offensive": ["shells", "password-cracking", "network-services"],
     "Protocolli": ["ssh-notes", "impacket-notes"],
+    "Sistemi Operativi": ["windows-powershell"],
 }
 
 NOTES_NAMES: dict[str, str] = {
@@ -907,6 +908,7 @@ NOTES_NAMES: dict[str, str] = {
     "network-services": "Network Services — WinRM, SSH, RDP, SMB",
     "ssh-notes": "SSH — Note Operative",
     "impacket-notes": "Impacket — Toolkit Python per reti Windows",
+    "windows-powershell": "Windows PowerShell — Comandi Facili con Equivalenti Linux",
 }
 
 
