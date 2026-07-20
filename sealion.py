@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import random
 import re
 import platform
 import select
@@ -164,8 +165,18 @@ def render_markdown(text: str) -> None:
         print(text)
 
 
+TIPS_FILE = Path(__file__).with_name("tips.txt")
+
+
+def load_tips() -> list[str]:
+    if TIPS_FILE.exists():
+        return [l for l in TIPS_FILE.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+    return ["SeaLion"]
+
+
 def print_banner() -> None:
-    print(load_logo())
+    tip = random.choice(load_tips())
+    print_sealsay(tip)
     print(f"\n{APP_NAME} — personal tool vault\n")
 
 

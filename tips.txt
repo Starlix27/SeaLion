@@ -1,0 +1,32 @@
+Usa 'nmap -sC -sV -oA scan <IP>' per una scansione completa con script e versioni.
+Sempre enumerare prima di attaccare: la ricognizione è il 90% del lavoro.
+Salva sempre l'output dei tuoi scan con -oA per non perdere nulla.
+Controlla /etc/hosts e aggiungi i domini target prima di iniziare.
+Usa 'searchsploit' per cercare exploit noti dopo aver trovato le versioni dei servizi.
+Un reverse shell Bash potrebbe non funzionare su dash — prova Python o socat.
+LinPEAS e linpeas sono i tuoi migliori amici per la privilege escalation su Linux.
+Controlla sempre i permessi SUID con: find / -perm -4000 2>/dev/null
+Cerca file con password: grep -rli 'password' /etc/ /var/ /home/ 2>/dev/null
+Usa 'chisel' per port forwarding quando la rete è segmentata.
+Fai sempre 'sudo -l' appena hai accesso — potresti avere permessi sudo senza saperlo.
+Non dimenticare le porte alte: nmap scansiona solo le prime 1000 di default.
+Usa 'gobuster dir' o 'feroxbuster' per l'enumerazione delle directory web.
+Controlla sempre i cron job: cat /etc/crontab e ls -la /etc/cron.*
+SMB aperto? Prova 'smbclient -L //<IP> -N' per share anonimi.
+Dopo un exploit, stabilizza la shell: python3 -c "import pty;pty.spawn('/bin/bash')"
+Usa 'pspy' per monitorare i processi in esecuzione senza essere root.
+Controlla le capabilities con: getcap -r / 2>/dev/null
+Writable /etc/passwd? Aggiungi un utente root: openssl passwd -1 'password'
+FTP anonimo? Prova 'ftp <IP>' con user 'anonymous' e password vuota.
+Hai trovato una LFI? Prova /etc/passwd, /proc/self/environ e i log.
+Usa 'impacket-smbserver' per trasferire file facilmente verso/da Windows.
+Ricordati di provare credenziali di default: admin/admin, root/root, admin/password.
+Usa 'serve on' per hostare rapidamente payload dal tuo SeaLion.
+Tieni un cheatsheet delle reverse shell: revshells.com è tuo amico.
+MySQL accessibile? Prova: mysql -u root -h <IP> senza password.
+Usa 'hydra' o 'medusa' per brute force — ma solo dopo aver esaurito le opzioni manuali.
+Controlla .bash_history, .mysql_history e altri file history per credenziali.
+Digita 'find <parola>' per cercare in tutti i cheatsheet e le note di SeaLion.
+Usa 'vuln list' per vedere tutti i protocolli con cheatsheet pronte.
+
+
