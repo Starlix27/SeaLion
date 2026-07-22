@@ -337,6 +337,10 @@ color:var(--green);font-weight:600}
 .sr-ctx{font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;
 text-overflow:ellipsis}
 .sr-empty{padding:16px;text-align:center;color:var(--text2);font-size:13px}
+mark{background:rgba(88,166,255,.25);color:inherit;border-bottom:2px solid var(--accent);
+padding:0 1px;border-radius:2px}
+.search-hl{background:rgba(88,166,255,.25);border-bottom:2px solid var(--accent);
+padding:0 1px;border-radius:2px;scroll-margin-top:80px}
 
 /* Search results page */
 .search-page-item{background:var(--surface);border:1px solid var(--border);
@@ -664,6 +668,35 @@ def _page_md(section: str, section_label: str, name: str, md_text: str) -> str:
 document.getElementById('md-target').innerHTML=marked.parse(`{safe_md}`);
 document.querySelectorAll('#md-target pre code').forEach(el=>{{if(typeof hljs!=='undefined')hljs.highlightElement(el);}});
 document.querySelectorAll('#md-target table').forEach(t=>{{const w=document.createElement('div');w.className='table-scroll';t.parentNode.insertBefore(w,t);w.appendChild(t);}});
+(function(){{
+  const q=new URLSearchParams(location.search).get('q');
+  if(!q)return;
+  const re=new RegExp('('+q.replace(/[.*+?^${{}}()|[\\]\\\\]/g,'\\\\$&')+')','gi');
+  const root=document.getElementById('md-target');
+  const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null);
+  const nodes=[];
+  while(walk.nextNode())nodes.push(walk.currentNode);
+  let first=null;
+  nodes.forEach(n=>{{
+    if(n.parentNode.tagName==='CODE'||n.parentNode.tagName==='PRE')return;
+    if(!re.test(n.nodeValue))return;
+    re.lastIndex=0;
+    const frag=document.createDocumentFragment();
+    let last=0,m;
+    while((m=re.exec(n.nodeValue))!==null){{
+      if(m.index>last)frag.appendChild(document.createTextNode(n.nodeValue.slice(last,m.index)));
+      const mark=document.createElement('mark');
+      mark.className='search-hl';
+      mark.textContent=m[1];
+      frag.appendChild(mark);
+      if(!first)first=mark;
+      last=re.lastIndex;
+    }}
+    if(last<n.nodeValue.length)frag.appendChild(document.createTextNode(n.nodeValue.slice(last)));
+    n.parentNode.replaceChild(frag,n);
+  }});
+  if(first)setTimeout(()=>first.scrollIntoView({{behavior:'smooth',block:'center'}}),150);
+}})();
 </script>
 </div>"""
     return _base_html(name, body, active=section)
@@ -913,14 +946,25 @@ def _page_search_results(query: str) -> str:
     eq = html.escape(query)
     cat_labels = {"notes": "Notes", "vuln": "Vuln", "tools": "Tools"}
 
+    def _hl_html(text: str) -> str:
+        escaped = html.escape(text)
+        import re as _re
+        return _re.sub(
+            f"({_re.escape(eq)})",
+            r"<mark>\1</mark>",
+            escaped,
+            flags=_re.IGNORECASE,
+        )
+
     cards = ""
     for r in results:
         tag_cls = r["section"]
         tag_label = cat_labels.get(r["section"], r["section"])
-        cards += f"""<a href="{r['href']}" style="text-decoration:none"><div class="search-page-item">
+        href = f"{r['href']}?q={html.escape(query)}"
+        cards += f"""<a href="{href}" style="text-decoration:none"><div class="search-page-item">
 <div class="sp-header"><span class="sp-tag {tag_cls}">{tag_label}</span>
-<span class="sp-name">{html.escape(r['name'])}</span></div>
-<div class="sp-ctx">{html.escape(r['context'])}</div>
+<span class="sp-name">{_hl_html(r['name'])}</span></div>
+<div class="sp-ctx">{_hl_html(r['context'])}</div>
 </div></a>\n"""
 
     if not results:
