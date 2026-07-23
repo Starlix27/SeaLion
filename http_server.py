@@ -1077,8 +1077,10 @@ class SlRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         import time as _time
-        client = self.client_address[0]
         msg = fmt % args
+        if "/api/logs" in msg:
+            return
+        client = self.client_address[0]
         ts = _time.strftime("%H:%M:%S")
         entry = {"ts": ts, "client": client, "msg": msg}
         with _log_lock:
