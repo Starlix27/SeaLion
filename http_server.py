@@ -32,6 +32,10 @@ _thread: threading.Thread | None = None
 _lhost: str = ""
 _lport: int = 4444
 
+_log_entries: list[dict[str, str]] = []
+_log_lock = threading.Lock()
+_LOG_MAX = 500
+
 
 def get_default_ip() -> str:
     try:
@@ -357,6 +361,20 @@ padding:2px 8px;border-radius:3px;font-weight:600}
 .search-page-item .sp-ctx{font-size:12px;color:var(--text2);margin-top:4px;
 line-height:1.5}
 
+/* Logs */
+.log-table-wrap{max-height:65vh;overflow-y:auto;border:1px solid var(--border);
+border-radius:6px;background:var(--bg)}
+.log-table{width:100%;border-collapse:collapse;font-size:13px;font-family:'JetBrains Mono',monospace}
+.log-table thead{position:sticky;top:0;background:var(--surface);z-index:1}
+.log-table th{text-align:left;padding:8px 12px;font-weight:600;color:var(--text2);
+border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.log-table td{padding:6px 12px;border-bottom:1px solid rgba(110,118,129,.15);
+vertical-align:top;word-break:break-all}
+.log-ts{color:var(--text2);font-size:12px;white-space:nowrap}
+.log-client{color:var(--accent);font-weight:600;white-space:nowrap}
+.log-msg{color:var(--text)}
+.log-table tbody tr:hover{background:var(--hover)}
+
 /* ===== MOBILE RESPONSIVE ===== */
 @media(max-width:768px){
   body{font-size:13px}
@@ -464,6 +482,7 @@ def _base_html(title: str, body: str, active: str = "") -> str:
         ("/vuln/", "Vuln", "vuln"),
         ("/tools/", "Tools", "tools"),
         ("/static/", "Static", "static"),
+        ("/logs", "Logs", "logs"),
     ]
     nav_html = ""
     for href, label, key in nav_items:
@@ -570,6 +589,7 @@ def _page_home() -> str:
       <li><a href="/vuln/">Vuln</a><span class="cnt">{n_vulns} protocolli</span></li>
       <li><a href="/tools/">Tools</a><span class="cnt">{n_tools} tool</span></li>
       <li><a href="/static/">Static</a><span class="cnt">{n_static} file</span></li>
+      <li><a href="/logs">Logs</a><span class="cnt">server logs</span></li>
     </ul>
   </div>
 </div>
@@ -598,6 +618,7 @@ def _page_home() -> str:
     {{name:'vuln',label:'Vuln',cnt:'{n_vulns} protocolli',href:'/vuln/'}},
     {{name:'tools',label:'Tools',cnt:'{n_tools} tool',href:'/tools/'}},
     {{name:'static',label:'Static',cnt:'{n_static} file',href:'/static/'}},
+    {{name:'logs',label:'Logs',cnt:'server logs',href:'/logs'}},
   ];
   const input=document.getElementById('term-input');
   const box=document.getElementById('suggestions');
@@ -941,6 +962,72 @@ def _extract_search_context(text: str, query_lower: str, max_len: int = 120) -> 
     return ""
 
 
+def _page_logs() -> str:
+    body = """\
+<div class="container">
+<div class="breadcrumb"><a href="/">Home</a> <span>/</span> Logs</div>
+<div class="page-title">Server Logs</div>
+<div class="page-sub" id="log-count">0 entries</div>
+<div style="margin:12px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+  <label style="display:flex;align-items:center;gap:6px;color:var(--text2);font-size:13px;cursor:pointer">
+    <input type="checkbox" id="log-auto" checked> Auto-scroll
+  </label>
+  <button onclick="document.getElementById('log-body').innerHTML='';window._logReset()"
+    style="background:var(--surface);border:1px solid var(--border);color:var(--text2);
+    padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px">Clear</button>
+  <span style="color:var(--text2);font-size:11px;margin-left:auto" id="log-status">connecting...</span>
+</div>
+<div class="log-table-wrap">
+<table class="log-table">
+<thead><tr><th style="width:70px">Ora</th><th style="width:130px">Client</th><th>Request</th></tr></thead>
+<tbody id="log-body"></tbody>
+</table>
+</div>
+</div>
+<script>
+(function(){
+  var offset=0;
+  var tbody=document.getElementById('log-body');
+  var countEl=document.getElementById('log-count');
+  var statusEl=document.getElementById('log-status');
+  var autoChk=document.getElementById('log-auto');
+  window._logReset=function(){offset=0;};
+
+  function poll(){
+    fetch('/api/logs?since='+offset)
+    .then(function(r){return r.json();})
+    .then(function(data){
+      statusEl.textContent='live';
+      statusEl.style.color='var(--green)';
+      if(data.entries&&data.entries.length){
+        data.entries.forEach(function(e){
+          var tr=document.createElement('tr');
+          tr.innerHTML='<td class="log-ts">'+esc(e.ts)+'</td>'+
+            '<td class="log-client">'+esc(e.client)+'</td>'+
+            '<td class="log-msg">'+esc(e.msg)+'</td>';
+          tbody.appendChild(tr);
+        });
+        offset=data.total;
+        countEl.textContent=data.total+' entr'+(data.total===1?'y':'ies');
+        if(autoChk.checked){
+          var wrap=document.querySelector('.log-table-wrap');
+          wrap.scrollTop=wrap.scrollHeight;
+        }
+      }
+    })
+    .catch(function(){
+      statusEl.textContent='disconnected';
+      statusEl.style.color='var(--red)';
+    });
+  }
+  function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+  poll();
+  setInterval(poll,2000);
+})();
+</script>"""
+    return _base_html("Logs", body, active="logs")
+
+
 def _page_search_results(query: str) -> str:
     results = _search_all(query)
     eq = html.escape(query)
@@ -989,9 +1076,15 @@ def get_web_url() -> str | None:
 class SlRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
+        import time as _time
         client = self.client_address[0]
         msg = fmt % args
-        print(f"\033[93m[serve]\033[0m {client} — {msg}")
+        ts = _time.strftime("%H:%M:%S")
+        entry = {"ts": ts, "client": client, "msg": msg}
+        with _log_lock:
+            _log_entries.append(entry)
+            if len(_log_entries) > _LOG_MAX:
+                del _log_entries[: len(_log_entries) - _LOG_MAX]
 
     def _send_text(self, body: str, content_type: str = "text/plain") -> None:
         data = body.encode("utf-8")
@@ -1035,6 +1128,14 @@ class SlRequestHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/search":
             q = qs.get("q", [""])[0]
             self._send_html(_page_search_results(q))
+        elif path == "/logs":
+            self._send_html(_page_logs())
+        elif path == "/api/logs":
+            since = int(qs.get("since", ["0"])[0])
+            with _log_lock:
+                entries = _log_entries[since:]
+                total = len(_log_entries)
+            self._send_json({"entries": entries, "total": total})
         elif path == "/notes":
             self._send_html(_page_list("Notes", "notes", _discover_notes()))
         elif path.startswith("/notes/"):
